@@ -1,0 +1,13 @@
+{
+  "task": "TERT Mutation Prediction",
+  "n_splits": 5,
+  "seed": 42,
+  "folds": [
+    {
+      "fold": 1,
+      "train_wsis": ["/path/to/embedding/C228T/npy/sample1.npy"],
+      "val_wsis": ["/path/to/embedding/Wild/npy/sample2.npy"],
+      "test_wsis": ["/path/to/embedding/C250T/npy/sample3.npy"]
+    }
+  ]
+}

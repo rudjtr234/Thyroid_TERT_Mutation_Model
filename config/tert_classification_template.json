@@ -1,0 +1,9 @@
+{
+  "svs_dir": "/path/to/svs",
+  "output_dir": "/path/to/patch_output",
+  "labels": {
+    "Wild": {"samples": []},
+    "C228T": {"samples": []},
+    "C250T": {"samples": []}
+  }
+}
