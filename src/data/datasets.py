@@ -125,7 +125,7 @@ def load_tert_labels_from_cv_splits(cv_split_file: str) -> dict:
     # 경로에서 라벨 추출
     for filepath in all_paths:
         # 경로에서 sample_id와 class 추출
-        # 예: /path/to/.../embedding/C228T/npy/TC_04_8001.npy
+        # 예: /data/.../embedding/C228T/npy/TC_04_8001.npy
         parts = Path(filepath).parts
         filename = Path(filepath).stem  # TC_04_8001
 
@@ -229,7 +229,7 @@ if __name__ == "__main__":
     set_seed(42)
 
     # Excel에서 label 로드
-    excel_path = "/path/to/Thyroid_TERT_labels.xlsx"
+    excel_path = "/path/to/project/config/Thyroid_TC_04_8001_TC_04_8201_TERT.xlsx"
     labels_dict = load_tert_labels_from_excel(excel_path)
 
     print(f"\nSample labels:")

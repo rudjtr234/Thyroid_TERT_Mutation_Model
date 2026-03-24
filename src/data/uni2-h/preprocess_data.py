@@ -3,20 +3,20 @@ Thyroid TERT 데이터 임베딩 (UNI2-h) - DataParallel 버전
 
 # C228T
 python preprocess_data.py \
-    --tile_dir /path/to/40x_patch/C228T \
-    --out_dir /path/to/embedding/C228T \
+    --tile_dir /path/to/dataset/40x_patch/C228T \
+    --out_dir /path/to/dataset/embedding/C228T \
     --batch_size 1024
 
 # C250T
 python preprocess_data.py \
-    --tile_dir /path/to/40x_patch/C250T \
-    --out_dir /path/to/embedding/C250T \
+    --tile_dir /path/to/dataset/40x_patch/C250T \
+    --out_dir /path/to/dataset/embedding/C250T \
     --batch_size 1024
 
 # WT
 python preprocess_data.py \
-    --tile_dir /path/to/40x_patch/Wild \
-    --out_dir /path/to/embedding/Wild \
+    --tile_dir /path/to/dataset/40x_patch/Wild \
+    --out_dir /path/to/dataset/embedding/Wild \
     --batch_size 1024
 """
 

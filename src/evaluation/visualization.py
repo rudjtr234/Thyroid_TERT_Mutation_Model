@@ -11,7 +11,7 @@ Usage:
 
     generate_attention_heatmaps_from_results(
         results_dir="/path/to/outputs/thyroid_tert_v0.1.1",
-        embedding_base_dir="/path/to/Thyroid_TERT_dataset/embedding",
+        embedding_base_dir="/data/dataset/Thyroid_TERT_dataset/embedding",
         save_dir="/path/to/outputs/thyroid_tert_v0.1.1/heatmaps",
         fold_num="best",
         n_correct=3,
@@ -528,7 +528,7 @@ def generate_attention_heatmaps_from_results(
     n_per_class: int = 5,
     interpolation: str = "gaussian",
     dpi: int = 200,
-    svs_base_dir: str = "/path/to/Thyroid_TERT_dataset/thyroid",
+    svs_base_dir: str = "/data/dataset/Thyroid_TERT_dataset/thyroid",
     thumbnail_max_side: int = 2048,
     overlay_alpha: float = 0.85,
     overlay_gamma: float = 0.60,
@@ -698,7 +698,7 @@ if __name__ == "__main__":
     parser.add_argument("--results_dir", type=str, required=True,
                         help="Directory containing training results")
     parser.add_argument("--embedding_base_dir", type=str,
-                        default="/path/to/Thyroid_TERT_dataset/embedding",
+                        default="/data/dataset/Thyroid_TERT_dataset/embedding",
                         help="Base directory for embeddings")
     parser.add_argument("--save_dir", type=str, default=None,
                         help="Directory to save heatmaps (default: results_dir/heatmaps)")
@@ -712,7 +712,7 @@ if __name__ == "__main__":
     parser.add_argument("--dpi", type=int, default=200,
                         help="DPI for saved images")
     parser.add_argument("--svs_base_dir", type=str,
-                        default="/path/to/Thyroid_TERT_dataset/thyroid",
+                        default="/data/dataset/Thyroid_TERT_dataset/thyroid",
                         help="Directory containing .svs files for thumbnail overlay")
     parser.add_argument("--thumbnail_max_side", type=int, default=2048,
                         help="Max side length for overlay thumbnail image")

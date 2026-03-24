@@ -42,6 +42,10 @@ sys.path.insert(0, src_dir)
 # =========================
 from models.abmil import ABMILTERTModel, ABMILTERTConfig
 from models.transmil import TransMILTERTModel, TransMILTERTConfig
+from models.acmil import ACMILTERTModel, ACMILTERTConfig
+from models.dtfd import DTFDMILTERTModel, DTFDMILTERTConfig
+from models.mhim import MHIMMILTERTModel, MHIMMILTERTConfig
+from models.clam import CLAMTERTModel, CLAMTERTConfig
 from data.datasets import TERTWSIDataset, load_tert_labels_from_cv_splits, set_seed
 from evaluation.metric import (
     compute_metrics_with_confusion,
@@ -126,6 +130,61 @@ def _resolve_model_hparams(args) -> Dict:
             'use_layer_norm': use_layer_norm,
         }
 
+    if model_type == 'acmil':
+        return {
+            'model_type': 'acmil',
+            'in_dim': int(getattr(args, 'in_dim', 1536)),
+            'embed_dim': int(getattr(args, 'embed_dim', 512)),
+            'attn_dim': int(getattr(args, 'attn_dim', 384)),
+            'num_fc_layers': int(getattr(args, 'num_fc_layers', 2)),
+            'dropout': float(getattr(args, 'dropout', 0.25)),
+            'num_classes': 2,
+            'n_token': int(getattr(args, 'acmil_n_token', 5)),
+            'n_masked_patch': int(getattr(args, 'acmil_n_masked_patch', 10)),
+            'mask_drop': float(getattr(args, 'acmil_mask_drop', 0.6)),
+            'use_layer_norm': use_layer_norm,
+        }
+
+    if model_type == 'dtfd':
+        return {
+            'model_type': 'dtfd',
+            'in_dim': int(getattr(args, 'in_dim', 1536)),
+            'embed_dim': int(getattr(args, 'embed_dim', 512)),
+            'attn_dim': int(getattr(args, 'attn_dim', 384)),
+            'num_fc_layers': int(getattr(args, 'num_fc_layers', 2)),
+            'dropout': float(getattr(args, 'dropout', 0.25)),
+            'num_classes': 2,
+            'n_pseudo_bags': int(getattr(args, 'dtfd_n_pseudo_bags', 4)),
+            'use_layer_norm': use_layer_norm,
+        }
+
+    if model_type == 'mhim':
+        return {
+            'model_type': 'mhim',
+            'in_dim': int(getattr(args, 'in_dim', 1536)),
+            'embed_dim': int(getattr(args, 'embed_dim', 512)),
+            'attn_dim': int(getattr(args, 'attn_dim', 384)),
+            'num_fc_layers': int(getattr(args, 'num_fc_layers', 2)),
+            'dropout': float(getattr(args, 'dropout', 0.25)),
+            'num_classes': 2,
+            'mask_ratio': float(getattr(args, 'mhim_mask_ratio', 0.5)),
+            'ema_decay': float(getattr(args, 'mhim_ema_decay', 0.999)),
+            'use_layer_norm': use_layer_norm,
+        }
+
+    if model_type == 'clam':
+        return {
+            'model_type': 'clam',
+            'in_dim': int(getattr(args, 'in_dim', 1536)),
+            'embed_dim': int(getattr(args, 'embed_dim', 512)),
+            'attn_dim': int(getattr(args, 'attn_dim', 384)),
+            'num_fc_layers': int(getattr(args, 'num_fc_layers', 2)),
+            'dropout': float(getattr(args, 'dropout', 0.25)),
+            'num_classes': 2,
+            'k_sample': int(getattr(args, 'clam_k_sample', 8)),
+            'use_layer_norm': use_layer_norm,
+        }
+
     return {
         'model_type': 'abmil',
         'gate': True,
@@ -157,6 +216,61 @@ def build_model_from_args(args):
             use_layer_norm=model_hparams['use_layer_norm'],
         )
         return TransMILTERTModel(config), config, model_hparams
+
+    if model_type == 'acmil':
+        config = ACMILTERTConfig(
+            in_dim=model_hparams['in_dim'],
+            embed_dim=model_hparams['embed_dim'],
+            attn_dim=model_hparams['attn_dim'],
+            num_fc_layers=model_hparams['num_fc_layers'],
+            dropout=model_hparams['dropout'],
+            num_classes=model_hparams['num_classes'],
+            n_token=model_hparams['n_token'],
+            n_masked_patch=model_hparams['n_masked_patch'],
+            mask_drop=model_hparams['mask_drop'],
+            use_layer_norm=model_hparams['use_layer_norm'],
+        )
+        return ACMILTERTModel(config), config, model_hparams
+
+    if model_type == 'dtfd':
+        config = DTFDMILTERTConfig(
+            in_dim=model_hparams['in_dim'],
+            embed_dim=model_hparams['embed_dim'],
+            attn_dim=model_hparams['attn_dim'],
+            num_fc_layers=model_hparams['num_fc_layers'],
+            dropout=model_hparams['dropout'],
+            num_classes=model_hparams['num_classes'],
+            n_pseudo_bags=model_hparams['n_pseudo_bags'],
+            use_layer_norm=model_hparams['use_layer_norm'],
+        )
+        return DTFDMILTERTModel(config), config, model_hparams
+
+    if model_type == 'mhim':
+        config = MHIMMILTERTConfig(
+            in_dim=model_hparams['in_dim'],
+            embed_dim=model_hparams['embed_dim'],
+            attn_dim=model_hparams['attn_dim'],
+            num_fc_layers=model_hparams['num_fc_layers'],
+            dropout=model_hparams['dropout'],
+            num_classes=model_hparams['num_classes'],
+            mask_ratio=model_hparams['mask_ratio'],
+            ema_decay=model_hparams['ema_decay'],
+            use_layer_norm=model_hparams['use_layer_norm'],
+        )
+        return MHIMMILTERTModel(config), config, model_hparams
+
+    if model_type == 'clam':
+        config = CLAMTERTConfig(
+            in_dim=model_hparams['in_dim'],
+            embed_dim=model_hparams['embed_dim'],
+            attn_dim=model_hparams['attn_dim'],
+            num_fc_layers=model_hparams['num_fc_layers'],
+            dropout=model_hparams['dropout'],
+            num_classes=model_hparams['num_classes'],
+            k_sample=model_hparams['k_sample'],
+            use_layer_norm=model_hparams['use_layer_norm'],
+        )
+        return CLAMTERTModel(config), config, model_hparams
 
     config = ABMILTERTConfig(
         gate=model_hparams['gate'],

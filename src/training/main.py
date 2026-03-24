@@ -59,22 +59,23 @@ def main():
                         help='Learning rate (default: 1e-4)')
     parser.add_argument('--bag_size', type=int, default=2000,
                         help='Bag size for MIL (default: 2000)')
-    parser.add_argument('--model_type', type=str, default='abmil', choices=['abmil', 'transmil'],
+    parser.add_argument('--model_type', type=str, default='abmil',
+                        choices=['abmil', 'transmil', 'acmil', 'dtfd', 'mhim', 'clam'],
                         help='Model architecture to train (default: abmil)')
     parser.add_argument('--in_dim', type=int, default=1536,
                         help='Input feature dimension (default: 1536)')
     parser.add_argument('--dropout', type=float, default=0.25,
                         help='Dropout used by model blocks (default: 0.25)')
 
-    # ABMIL params
+    # ABMIL / ACMIL / DTFD / MHIM / CLAM 공통 params
     parser.add_argument('--embed_dim', type=int, default=512,
-                        help='ABMIL embedding dimension (default: 512)')
+                        help='Embedding dimension (default: 512)')
     parser.add_argument('--attn_dim', type=int, default=384,
-                        help='ABMIL attention hidden dimension (default: 384)')
+                        help='Attention hidden dimension (default: 384)')
     parser.add_argument('--num_fc_layers', type=int, default=2,
-                        help='ABMIL patch-embed MLP depth (default: 2)')
+                        help='Patch-embed MLP depth (default: 2)')
 
-    # TransMIL params (GitHub default style)
+    # TransMIL params
     parser.add_argument('--transmil_embed_dim', type=int, default=512,
                         help='TransMIL embedding dimension (default: 512)')
     parser.add_argument('--transmil_num_heads', type=int, default=8,
@@ -85,6 +86,29 @@ def main():
                         help='Nyström landmarks for TransMIL attention (default: 256)')
     parser.add_argument('--transmil_pinv_iterations', type=int, default=6,
                         help='Nyström pseudo-inverse iterations (default: 6)')
+
+    # ACMIL params
+    parser.add_argument('--acmil_n_token', type=int, default=5,
+                        help='ACMIL number of attention heads/tokens (default: 5)')
+    parser.add_argument('--acmil_n_masked_patch', type=int, default=10,
+                        help='ACMIL top-k patches to mask for auxiliary heads (default: 10)')
+    parser.add_argument('--acmil_mask_drop', type=float, default=0.6,
+                        help='ACMIL random mask drop ratio (default: 0.6)')
+
+    # DTFD-MIL params
+    parser.add_argument('--dtfd_n_pseudo_bags', type=int, default=4,
+                        help='DTFD number of pseudo-bags per WSI (default: 4)')
+
+    # MHIM-MIL params
+    parser.add_argument('--mhim_mask_ratio', type=float, default=0.5,
+                        help='MHIM ratio of easy patches to mask (default: 0.5)')
+    parser.add_argument('--mhim_ema_decay', type=float, default=0.999,
+                        help='MHIM EMA decay for teacher update (default: 0.999)')
+
+    # CLAM params
+    parser.add_argument('--clam_k_sample', type=int, default=8,
+                        help='CLAM top/bottom-k patches for instance loss (default: 8)')
+
     parser.add_argument('--disable_layer_norm', action='store_true',
                         help='Disable input layer normalization before patch embedding')
     parser.add_argument('--seed', type=int, default=42,

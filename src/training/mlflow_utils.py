@@ -20,11 +20,7 @@ import pandas as pd
 import mlflow
 
 # SSL 인증서 검증 비활성화 (자체 서명된 인증서를 사용하는 MLflow 서버 허용)
-MLFLOW_TRACKING_URI = os.getenv('MLFLOW_TRACKING_URI')
-MLFLOW_EXPERIMENT_NAME = os.getenv('MLFLOW_EXPERIMENT_NAME', 'thyroid_tert')
-MLFLOW_TRACKING_INSECURE_TLS = os.getenv('MLFLOW_TRACKING_INSECURE_TLS')
-if MLFLOW_TRACKING_INSECURE_TLS is not None:
-    os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = MLFLOW_TRACKING_INSECURE_TLS
+# Set MLFLOW_TRACKING_INSECURE_TLS=true in your environment if using self-signed certificates
 
 
 # =========================
@@ -104,11 +100,10 @@ def upload_to_mlflow(
 
     # 버전 추출 (경로에서)
     version = Path(model_save_dir).name.replace("thyroid_tert_model_", "").replace("thyroid_tert_", "").replace("run_", "")
+
     # MLflow 설정
-    if not MLFLOW_TRACKING_URI:
-        raise RuntimeError("Set MLFLOW_TRACKING_URI before MLflow upload.")
-    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-    mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
+    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"))
+    mlflow.set_experiment("thyroid_tert")
 
     run_name = f"tert_auto_{version}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
