@@ -64,6 +64,8 @@ def main():
                         help='Model architecture to train (default: abmil)')
     parser.add_argument('--in_dim', type=int, default=1536,
                         help='Input feature dimension (default: 1536)')
+    parser.add_argument('--num_classes', type=int, default=2, choices=[2, 3],
+                        help='2 (Wild vs Mutant) or 3 (Wild/C228T/C250T) (default: 2)')
     parser.add_argument('--dropout', type=float, default=0.25,
                         help='Dropout used by model blocks (default: 0.25)')
 
@@ -127,9 +129,10 @@ def main():
     args = parser.parse_args()
 
     # Run training
+    from data.tert_common import get_tert_task_label
     print(f"{'='*80}")
     print(f"Starting TERT Mutation Prediction Training Pipeline")
-    print(f"Task: Wild (0) vs Mutant (1)")
+    print(f"Task: {get_tert_task_label(num_classes=args.num_classes)}")
     print(f"Model: {args.model_type}")
     print(f"{'='*80}\n")
 
@@ -151,6 +154,7 @@ def main():
                 bag_size=args.bag_size,
                 seed=args.seed,
                 model_type=args.model_type,
+                num_classes=args.num_classes,
             )
             print(f"\n[+] MLflow upload completed!")
 

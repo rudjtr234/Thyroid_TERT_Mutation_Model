@@ -17,9 +17,19 @@ from pathlib import Path
 from sklearn.model_selection import StratifiedKFold
 
 try:
-    from .tert_common import load_tert_labels_from_excel, set_seed
+    from .tert_common import (
+        load_tert_labels_from_excel,
+        set_seed,
+        get_tert_class_names,
+        get_tert_label_mapping,
+    )
 except ImportError:  # pragma: no cover - script execution fallback
-    from tert_common import load_tert_labels_from_excel, set_seed
+    from tert_common import (
+        load_tert_labels_from_excel,
+        set_seed,
+        get_tert_class_names,
+        get_tert_label_mapping,
+    )
 
 
 def find_npy_files(data_root: str, labels_dict: dict) -> list:
@@ -56,7 +66,8 @@ def create_stratified_kfold_splits(
     seed: int = 42,
     train_ratio: float = 0.7,
     val_ratio: float = 0.1,
-    test_ratio: float = 0.2
+    test_ratio: float = 0.2,
+    num_classes: int = 2,
 ) -> dict:
     """
     Create stratified K-fold splits with explicit train/val/test ratios.
@@ -68,11 +79,13 @@ def create_stratified_kfold_splits(
         train_ratio: overall train ratio
         val_ratio: overall val ratio
         test_ratio: overall test ratio (must match 1 / n_splits)
+        num_classes: 2 (Wild vs Mutant) or 3 (Wild/C228T/C250T)
 
     Returns:
         cv_splits dict
     """
     set_seed(seed)
+    class_names = get_tert_class_names(num_classes=num_classes)
 
     ratio_sum = train_ratio + val_ratio + test_ratio
     if abs(ratio_sum - 1.0) > 1e-6:
@@ -122,6 +135,12 @@ def create_stratified_kfold_splits(
         val_labels = labels[val_idx]
         test_labels = labels[test_idx]
 
+        def _class_counts(split_labels: np.ndarray) -> dict:
+            return {
+                class_name: int(np.sum(split_labels == class_idx))
+                for class_idx, class_name in enumerate(class_names)
+            }
+
         fold_info = {
             "fold": fold_idx + 1,
             "train_wsis": train_files,
@@ -130,23 +149,38 @@ def create_stratified_kfold_splits(
             "train_count": len(train_files),
             "val_count": len(val_files),
             "test_count": len(test_files),
-            "train_pos_count": int(np.sum(train_labels == 1)),
-            "train_neg_count": int(np.sum(train_labels == 0)),
-            "val_pos_count": int(np.sum(val_labels == 1)),
-            "val_neg_count": int(np.sum(val_labels == 0)),
-            "test_pos_count": int(np.sum(test_labels == 1)),
-            "test_neg_count": int(np.sum(test_labels == 0)),
         }
+
+        if num_classes <= 2:
+            fold_info["train_pos_count"] = int(np.sum(train_labels == 1))
+            fold_info["train_neg_count"] = int(np.sum(train_labels == 0))
+            fold_info["val_pos_count"] = int(np.sum(val_labels == 1))
+            fold_info["val_neg_count"] = int(np.sum(val_labels == 0))
+            fold_info["test_pos_count"] = int(np.sum(test_labels == 1))
+            fold_info["test_neg_count"] = int(np.sum(test_labels == 0))
+        else:
+            fold_info["train_class_counts"] = _class_counts(train_labels)
+            fold_info["val_class_counts"] = _class_counts(val_labels)
+            fold_info["test_class_counts"] = _class_counts(test_labels)
 
         folds.append(fold_info)
 
         print(f"\nFold {fold_idx + 1}:")
-        print(f"  Train: {len(train_files)} (Mutant: {fold_info['train_pos_count']}, Wild: {fold_info['train_neg_count']})")
-        print(f"  Val:   {len(val_files)} (Mutant: {fold_info['val_pos_count']}, Wild: {fold_info['val_neg_count']})")
-        print(f"  Test:  {len(test_files)} (Mutant: {fold_info['test_pos_count']}, Wild: {fold_info['test_neg_count']})")
+        if num_classes <= 2:
+            print(f"  Train: {len(train_files)} (Mutant: {fold_info['train_pos_count']}, Wild: {fold_info['train_neg_count']})")
+            print(f"  Val:   {len(val_files)} (Mutant: {fold_info['val_pos_count']}, Wild: {fold_info['val_neg_count']})")
+            print(f"  Test:  {len(test_files)} (Mutant: {fold_info['test_pos_count']}, Wild: {fold_info['test_neg_count']})")
+        else:
+            counts_str = lambda counts: ", ".join(f"{name}: {counts[name]}" for name in class_names)
+            print(f"  Train: {len(train_files)} ({counts_str(fold_info['train_class_counts'])})")
+            print(f"  Val:   {len(val_files)} ({counts_str(fold_info['val_class_counts'])})")
+            print(f"  Test:  {len(test_files)} ({counts_str(fold_info['test_class_counts'])})")
 
     cv_splits = {
         "task": "TERT Mutation Prediction",
+        "num_classes": num_classes,
+        "class_names": class_names,
+        "label_mapping": get_tert_label_mapping(num_classes=num_classes),
         "n_splits": n_splits,
         "seed": seed,
         "train_ratio": train_ratio,
@@ -154,10 +188,17 @@ def create_stratified_kfold_splits(
         "test_ratio": test_ratio,
         "val_ratio_from_trainval": val_ratio_from_trainval,
         "total_samples": len(npy_files),
-        "total_mutant": int(np.sum(labels == 1)),
-        "total_wild": int(np.sum(labels == 0)),
         "folds": folds
     }
+
+    if num_classes <= 2:
+        cv_splits["total_mutant"] = int(np.sum(labels == 1))
+        cv_splits["total_wild"] = int(np.sum(labels == 0))
+    else:
+        cv_splits["total_class_counts"] = {
+            class_name: int(np.sum(labels == class_idx))
+            for class_idx, class_name in enumerate(class_names)
+        }
 
     return cv_splits
 
@@ -180,6 +221,8 @@ def main():
                         help='Overall validation ratio (default: 0.1)')
     parser.add_argument('--test_ratio', type=float, default=0.2,
                         help='Overall test ratio (default: 0.2, must match 1/n_splits)')
+    parser.add_argument('--num_classes', type=int, default=2, choices=[2, 3],
+                        help='2 (Wild vs Mutant) or 3 (Wild/C228T/C250T) (default: 2)')
 
     args = parser.parse_args()
 
@@ -189,10 +232,11 @@ def main():
 
     # Load labels
     print(f"\nLoading labels from: {args.label_file}")
-    labels_dict = load_tert_labels_from_excel(args.label_file)
+    labels_dict = load_tert_labels_from_excel(args.label_file, num_classes=args.num_classes)
     print(f"  Total labels: {len(labels_dict)}")
-    print(f"  Mutant: {sum(1 for v in labels_dict.values() if v == 1)}")
-    print(f"  Wild: {sum(1 for v in labels_dict.values() if v == 0)}")
+    for idx, class_name in enumerate(get_tert_class_names(num_classes=args.num_classes)):
+        count = sum(1 for v in labels_dict.values() if v == idx)
+        print(f"  {class_name}: {count}")
 
     # Find NPY files
     print(f"\nSearching for NPY files in: {args.data_root}")
@@ -211,14 +255,16 @@ def main():
         seed=args.seed,
         train_ratio=args.train_ratio,
         val_ratio=args.val_ratio,
-        test_ratio=args.test_ratio
+        test_ratio=args.test_ratio,
+        num_classes=args.num_classes,
     )
 
     # Save
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_file = output_dir / f"cv_splits_tert_k{args.n_splits}_seed{args.seed}_v0.1.0.json"
+    suffix = "_3class" if args.num_classes == 3 else ""
+    output_file = output_dir / f"cv_splits_tert_k{args.n_splits}_seed{args.seed}_v0.1.0{suffix}.json"
     with open(output_file, 'w') as f:
         json.dump(cv_splits, f, indent=2)
 

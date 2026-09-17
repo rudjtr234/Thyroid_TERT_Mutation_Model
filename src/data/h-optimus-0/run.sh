@@ -1,6 +1,6 @@
 #!/bin/bash
 # H-Optimus-0 Feature Extraction - Thyroid TERT Dataset
-# 143 서버에서 실행
+# 원격 서버용에서 실행
 #
 # Usage:
 #   cd /path/to/Thyroid_TERT_prediction_model/src/data/h-optimus-0
@@ -16,8 +16,8 @@ NPROC=${#GPUS[@]}
 MASTER_PORT=29502
 BATCH_SIZE=512
 
-TILE_BASE="/path/to/dataset/40x_patch"
-OUT_BASE="/path/to/dataset/h_optimus_embeddings"
+TILE_BASE="/path/to/dataset/20x_patch"
+OUT_BASE="/path/to/dataset/h_optimus_embeddings_20x"
 
 LOG_DIR="$SCRIPT_DIR/logs"
 mkdir -p "$LOG_DIR"

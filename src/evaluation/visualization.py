@@ -11,7 +11,7 @@ Usage:
 
     generate_attention_heatmaps_from_results(
         results_dir="/path/to/outputs/thyroid_tert_v0.1.1",
-        embedding_base_dir="/data/dataset/Thyroid_TERT_dataset/embedding",
+        embedding_base_dir="/path/to/dataset/embedding",
         save_dir="/path/to/outputs/thyroid_tert_v0.1.1/heatmaps",
         fold_num="best",
         n_correct=3,
@@ -47,12 +47,29 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 
 
+def get_tert_class_names_safe(num_classes: int = 2) -> List[str]:
+    """tert_common.get_tert_class_names wrapper with a script-execution import fallback."""
+    try:
+        from data.tert_common import get_tert_class_names
+    except ImportError:  # pragma: no cover - script execution fallback
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from data.tert_common import get_tert_class_names
+    return get_tert_class_names(num_classes=num_classes)
+
+
 # =========================
 # Helpers
 # =========================
-def create_attention_heatmap_colormap():
-    """Attention score colormap (blue -> green -> yellow -> red)."""
-    colors = ["#2E3192", "#1BFFFF", "#00FF00", "#FFFF00", "#FF0000"]
+def create_attention_heatmap_colormap(negative: bool = False):
+    """Attention score colormap.
+    negative=False (Mutant): low=deep blue → high=red
+    negative=True  (Wild):   low=light blue → high=deep blue
+    """
+    if negative:
+        colors = ["#B0C4DE", "#4169E1", "#2E3192", "#1A237E", "#08096B"]
+    else:
+        colors = ["#08096B", "#2E3192", "#4169E1", "#FF8C00", "#FF0000"]
     return LinearSegmentedColormap.from_list("attention", colors, N=256)
 
 
@@ -367,8 +384,20 @@ def create_attention_heatmap(
     return heatmap
 
 
-def get_label_display_name(label: int, mutation_type: Optional[str] = None) -> str:
-    """Get display name for TERT mutation label."""
+def get_label_display_name(
+    label: int,
+    mutation_type: Optional[str] = None,
+    num_classes: int = 2,
+) -> str:
+    """Get display name for TERT mutation label.
+
+    num_classes=2: label 1 = Mutant (optionally annotated with subtype folder name)
+    num_classes=3: label indexes directly into ["Wild", "C228T", "C250T"] — no folder inference needed.
+    """
+    if num_classes > 2:
+        class_names = get_tert_class_names_safe(num_classes=num_classes)
+        return class_names[label] if 0 <= label < len(class_names) else f"Class {label}"
+
     if label == 1:
         if mutation_type:
             return f"Mutant ({mutation_type})"
@@ -401,6 +430,9 @@ def visualize_single_heatmap(
     true_label = wsi_data.get("true_label")
     pred_label = wsi_data.get("predicted_label")
     pred_prob = wsi_data.get("pred_prob")
+    class_probs = wsi_data.get("class_probs")
+    # class_probs가 있으면 3-class 실행 결과 (4.5절: class_probs는 multiclass 전용 필드)
+    num_classes = 3 if class_probs else 2
 
     # Get mutation type from path
     mutation_type = get_class_from_npy_path(npy_path) if npy_path else None
@@ -408,9 +440,14 @@ def visualize_single_heatmap(
     print(f"\n[{case_idx}] {wsi_name}")
     print(f"  Type: {'Correct' if case_type == 'correct' else 'Incorrect'}")
     if true_label is not None:
-        print(f"  True Label: {get_label_display_name(true_label, mutation_type if true_label == 1 else None)}")
+        true_mutation_type = mutation_type if (num_classes <= 2 and true_label == 1) else None
+        print(f"  True Label: {get_label_display_name(true_label, true_mutation_type, num_classes=num_classes)}")
     if pred_label is not None and pred_prob is not None:
-        print(f"  Predicted: {get_label_display_name(pred_label)} (prob={pred_prob:.3f})")
+        print(f"  Predicted: {get_label_display_name(pred_label, num_classes=num_classes)} (prob={pred_prob:.3f})")
+    if class_probs:
+        class_names = get_tert_class_names_safe(num_classes=num_classes)
+        probs_str = ", ".join(f"{name}={p:.3f}" for name, p in zip(class_names, class_probs))
+        print(f"  Class Probs: {probs_str}")
     print(f"  Patches: {n_patches}")
     print(f"  Score Type: {score_type}")
     print(f"  Score Range (Raw): [{attention_scores.min():.6f}, {attention_scores.max():.6f}]")
@@ -472,8 +509,9 @@ def visualize_single_heatmap(
     title_parts = [f"{wsi_name}"]
     title_parts.append("Correct Prediction" if case_type.startswith("correct") else "Incorrect Prediction")
     if true_label is not None and pred_label is not None:
-        true_str = get_label_display_name(true_label, mutation_type if true_label == 1 else None)
-        pred_str = get_label_display_name(pred_label)
+        title_true_mutation_type = mutation_type if (num_classes <= 2 and true_label == 1) else None
+        true_str = get_label_display_name(true_label, title_true_mutation_type, num_classes=num_classes)
+        pred_str = get_label_display_name(pred_label, num_classes=num_classes)
         title_parts.append(f"True: {true_str} | Pred: {pred_str} ({pred_prob:.3f})")
 
     ax.set_title("\n".join(title_parts), fontsize=14, fontweight="bold", pad=20)
@@ -528,7 +566,7 @@ def generate_attention_heatmaps_from_results(
     n_per_class: int = 5,
     interpolation: str = "gaussian",
     dpi: int = 200,
-    svs_base_dir: str = "/data/dataset/Thyroid_TERT_dataset/thyroid",
+    svs_base_dir: str = "/path/to/slides",
     thumbnail_max_side: int = 2048,
     overlay_alpha: float = 0.85,
     overlay_gamma: float = 0.60,
@@ -604,9 +642,19 @@ def generate_attention_heatmaps_from_results(
     print(f"[+] Loaded attention scores for {len(attention_scores_dict)} WSIs")
 
     # 4) Build npy_path mapping from CV splits
-    cv_split_path = results_dir.parent.parent / "config" / "cv_splits_tert_5fold_seed42.json"
+    # cv_split_file provenance 우선 사용 (attention JSON -> cv_summary -> 레거시 하드코딩 폴백)
+    cv_split_path = None
+    provenance_path = attention_data.get("cv_split_file") or cv_summary.get("cv_split_file")
+    if provenance_path and Path(provenance_path).exists():
+        cv_split_path = Path(provenance_path)
+    else:
+        legacy_path = results_dir.parent.parent / "config" / "cv_splits_tert_5fold_seed42.json"
+        if legacy_path.exists():
+            cv_split_path = legacy_path
+            print(f"[!] cv_split_file provenance not found; falling back to legacy path: {legacy_path}")
+
     npy_path_mapping = {}
-    if cv_split_path.exists():
+    if cv_split_path is not None and cv_split_path.exists():
         with open(cv_split_path, "r") as f:
             cv_splits = json.load(f)
         for fold_data in cv_splits["folds"]:
@@ -641,10 +689,17 @@ def generate_attention_heatmaps_from_results(
             entry = (wsi_name, attention_scores_dict[wsi_name], npy_path)
             subtype_cases[subtype].append(entry)
 
-    # Sort by confidence (distance from 0.5) and take top n_per_class
+    # Sort by confidence and take top n_per_class.
+    # multiclass (class_probs present): use pred_confidence (argmax prob) directly.
+    # binary: use distance from 0.5 as a confidence proxy.
+    def _confidence_key(wsi_data: Dict) -> float:
+        if wsi_data.get("class_probs"):
+            return wsi_data.get("pred_confidence", wsi_data.get("pred_prob", 0.5))
+        return abs(wsi_data.get("pred_prob", 0.5) - 0.5)
+
     for subtype in subtype_cases:
         subtype_cases[subtype].sort(
-            key=lambda x: abs(x[1].get("pred_prob", 0.5) - 0.5), reverse=True
+            key=lambda x: _confidence_key(x[1]), reverse=True
         )
         subtype_cases[subtype] = subtype_cases[subtype][:n_per_class]
 
@@ -655,10 +710,9 @@ def generate_attention_heatmaps_from_results(
     # 7) Create save directory
     save_dir = Path(save_dir) / f"fold_{fold_idx}_attention_heatmaps"
     save_dir.mkdir(parents=True, exist_ok=True)
-    cmap = create_attention_heatmap_colormap()
-
     # 8) Generate heatmaps per subtype
     for subtype in ["C228T", "C250T", "Wild"]:
+        cmap = create_attention_heatmap_colormap(negative=(subtype == "Wild"))
         cases = subtype_cases[subtype]
         print(f"\n{'-'*80}")
         print(f"Processing Correct {subtype} Predictions ({len(cases)})")
@@ -698,7 +752,7 @@ if __name__ == "__main__":
     parser.add_argument("--results_dir", type=str, required=True,
                         help="Directory containing training results")
     parser.add_argument("--embedding_base_dir", type=str,
-                        default="/data/dataset/Thyroid_TERT_dataset/embedding",
+                        default="/path/to/dataset/embedding",
                         help="Base directory for embeddings")
     parser.add_argument("--save_dir", type=str, default=None,
                         help="Directory to save heatmaps (default: results_dir/heatmaps)")
@@ -712,7 +766,7 @@ if __name__ == "__main__":
     parser.add_argument("--dpi", type=int, default=200,
                         help="DPI for saved images")
     parser.add_argument("--svs_base_dir", type=str,
-                        default="/data/dataset/Thyroid_TERT_dataset/thyroid",
+                        default="/path/to/slides",
                         help="Directory containing .svs files for thumbnail overlay")
     parser.add_argument("--thumbnail_max_side", type=int, default=2048,
                         help="Max side length for overlay thumbnail image")

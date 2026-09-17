@@ -18,19 +18,32 @@ from sklearn.metrics import (
 )
 import torch
 
+try:
+    from data.tert_common import get_tert_class_names
+except ImportError:  # pragma: no cover - script execution fallback
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from data.tert_common import get_tert_class_names
+
 matplotlib.use('Agg')
 
 
 # =========================
 # Metrics Computation
 # =========================
-def compute_metrics_with_confusion(y_true, y_pred, y_prob):
+def compute_metrics_with_confusion(y_true, y_pred, y_prob, num_classes: int = 2):
     """
     혼동행렬 기반 종합 지표 계산 (Thyroid TERT)
 
-    Positive class: Mutant (C228T/C250T)
-    Negative class: Wild
+    num_classes=2: Positive class = Mutant (C228T/C250T), Negative class = Wild
+    num_classes>2: One-vs-Rest macro-averaged metrics + per-class breakdown
     """
+    if num_classes <= 2:
+        return _compute_binary_metrics(y_true, y_pred, y_prob)
+    return _compute_multiclass_metrics(y_true, y_pred, y_prob, num_classes=num_classes)
+
+
+def _compute_binary_metrics(y_true, y_pred, y_prob):
     # Force 2x2 order even if one class is absent in predictions.
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
 
@@ -55,6 +68,91 @@ def compute_metrics_with_confusion(y_true, y_pred, y_prob):
         "tn": int(tn),
         "fp": int(fp),
         "fn": int(fn)
+    }
+
+
+def _compute_multiclass_metrics(y_true, y_pred, y_prob, num_classes: int):
+    """
+    One-vs-Rest macro metrics + per-class breakdown for TERT 3-class task.
+
+    Args:
+        y_true: list/array of int labels
+        y_pred: list/array of int predicted labels (argmax)
+        y_prob: list/array of shape [N, num_classes] softmax probabilities
+    """
+    class_names = get_tert_class_names(num_classes=num_classes)
+    labels = list(range(num_classes))
+
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    y_prob = np.asarray(y_prob)
+
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
+    acc = accuracy_score(y_true, y_pred)
+    f1_macro = f1_score(y_true, y_pred, labels=labels, average='macro', zero_division=0)
+
+    present_classes = sorted(set(y_true.tolist()))
+    missing_classes = [class_names[c] for c in labels if c not in present_classes]
+
+    per_class = {}
+    sens_list, spec_list, ppv_list, npv_list, auc_list = [], [], [], [], []
+
+    for class_idx, class_name in enumerate(class_names):
+        class_true = (y_true == class_idx).astype(int)
+        class_pred = (y_pred == class_idx).astype(int)
+
+        tn, fp, fn, tp = confusion_matrix(class_true, class_pred, labels=[0, 1]).ravel()
+        sens = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        spec = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+        ppv = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        npv = tn / (tn + fn) if (tn + fn) > 0 else 0.0
+        class_f1 = f1_score(class_true, class_pred, zero_division=0)
+
+        class_auc = None
+        if class_idx in present_classes and len(set(class_true.tolist())) > 1:
+            class_auc = float(roc_auc_score(class_true, y_prob[:, class_idx]))
+            auc_list.append(class_auc)
+
+        per_class[class_name] = {
+            "sensitivity": sens,
+            "specificity": spec,
+            "ppv": ppv,
+            "npv": npv,
+            "f1": class_f1,
+            "auc": class_auc,
+            "support": int(np.sum(y_true == class_idx)),
+        }
+        sens_list.append(sens)
+        spec_list.append(spec)
+        ppv_list.append(ppv)
+        npv_list.append(npv)
+
+    # Macro AUC: 존재하는 클래스만 대상으로 sklearn OvR을 시도하고,
+    # 클래스 누락으로 실패하면 위에서 이미 계산한 per-class AUC(auc_list)의 평균으로 폴백한다.
+    # (계획서 4.4절 "AUC/PR 예외 처리 방침": present classes만으로 계산, 무조건 0.5로 떨어뜨리지 않음)
+    if len(present_classes) > 1:
+        try:
+            auc_macro = float(roc_auc_score(
+                y_true, y_prob, multi_class='ovr', average='macro', labels=labels
+            ))
+        except ValueError:
+            auc_macro = float(np.mean(auc_list)) if auc_list else 0.5
+    else:
+        auc_macro = float(np.mean(auc_list)) if auc_list else 0.5
+
+    return {
+        "accuracy": acc,
+        "auc": float(auc_macro),
+        "sensitivity": float(np.mean(sens_list)),
+        "specificity": float(np.mean(spec_list)),
+        "ppv": float(np.mean(ppv_list)),
+        "precision": float(np.mean(ppv_list)),
+        "npv": float(np.mean(npv_list)),
+        "f1": f1_macro,
+        "confusion_matrix": cm.tolist(),
+        "class_names": class_names,
+        "per_class": per_class,
+        "missing_classes_in_eval": missing_classes,
     }
 
 
@@ -235,26 +333,45 @@ def print_summary_statistics(summary_stats):
         print(row)
 
 
-def print_confusion_matrix_summary(fold_results):
+def print_confusion_matrix_summary(fold_results, num_classes: int = 2):
     """전체 fold의 confusion matrix 합계 출력"""
     print(f"\n{'-'*80}")
     print(f"Total Confusion Matrix (Test):")
     print(f"{'-'*80}")
 
-    total_tp = sum(get_test_metrics(r)['tp'] for r in fold_results)
-    total_tn = sum(get_test_metrics(r)['tn'] for r in fold_results)
-    total_fp = sum(get_test_metrics(r)['fp'] for r in fold_results)
-    total_fn = sum(get_test_metrics(r)['fn'] for r in fold_results)
+    if num_classes <= 2:
+        total_tp = sum(get_test_metrics(r)['tp'] for r in fold_results)
+        total_tn = sum(get_test_metrics(r)['tn'] for r in fold_results)
+        total_fp = sum(get_test_metrics(r)['fp'] for r in fold_results)
+        total_fn = sum(get_test_metrics(r)['fn'] for r in fold_results)
 
-    print(f"    TP: {total_tp:4d}  |  FN: {total_fn:4d}")
-    print(f"    FP: {total_fp:4d}  |  TN: {total_tn:4d}")
+        print(f"    TP: {total_tp:4d}  |  FN: {total_fn:4d}")
+        print(f"    FP: {total_fp:4d}  |  TN: {total_tn:4d}")
+        return
+
+    class_names = get_tert_class_names(num_classes=num_classes)
+    total_cm = np.zeros((num_classes, num_classes), dtype=int)
+    for r in fold_results:
+        cm = get_test_metrics(r).get('confusion_matrix')
+        if cm is not None:
+            total_cm += np.array(cm)
+
+    header = "".join(f"{name:>10s}" for name in class_names)
+    print(f"{'':>12s}{header}   (rows=true, cols=pred)")
+    for i, name in enumerate(class_names):
+        row = "".join(f"{total_cm[i, j]:>10d}" for j in range(num_classes))
+        print(f"{name:>12s}{row}")
 
 
 # =========================
 # Visualization Functions
 # =========================
-def plot_roc_curves(fold_results, save_dir):
-    """각 fold별 ROC curve와 평균 ROC curve 그리기"""
+def plot_roc_curves(fold_results, save_dir, num_classes: int = 2):
+    """각 fold별 ROC curve와 평균 ROC curve 그리기 (multiclass: per-class + macro)"""
+    if num_classes > 2:
+        _plot_roc_curves_multiclass(fold_results, save_dir, num_classes=num_classes)
+        return
+
     plt.figure(figsize=(10, 8))
 
     tprs = []
@@ -304,8 +421,47 @@ def plot_roc_curves(fold_results, save_dir):
     print(f"[+] ROC curves saved: {save_path}")
 
 
-def plot_precision_recall_curves(fold_results, save_dir):
-    """각 fold별 Precision-Recall curve 그리기"""
+def _plot_roc_curves_multiclass(fold_results, save_dir, num_classes: int):
+    """Best fold 기준 per-class ROC curve + macro curve를 한 그림에 표시."""
+    class_names = get_tert_class_names(num_classes=num_classes)
+    best_fold = max(fold_results, key=lambda r: get_test_metrics(r)['auc'])
+
+    roc_per_class = best_fold.get('test_roc_per_class', {})
+    roc_macro = best_fold.get('test_roc_macro', {})
+
+    plt.figure(figsize=(10, 8))
+    for class_name in class_names:
+        curve = roc_per_class.get(class_name)
+        if not curve:
+            continue
+        plt.plot(curve['fpr'], curve['tpr'], alpha=0.7, linewidth=2,
+                  label=f"{class_name} (AUC = {curve['auc']:.3f})")
+
+    if roc_macro:
+        plt.plot(roc_macro['fpr'], roc_macro['tpr'], color='k', linewidth=2.5, linestyle='--',
+                  label=f"Macro-average (AUC = {roc_macro['auc']:.3f})")
+
+    plt.plot([0, 1], [0, 1], 'k:', alpha=0.5, label='Random Classifier')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate', fontsize=12)
+    plt.ylabel('True Positive Rate', fontsize=12)
+    plt.title(f"ROC Curves (OvR) - Fold {best_fold['fold']} - TERT 3-class", fontsize=14, fontweight='bold')
+    plt.legend(loc="lower right", fontsize=9)
+    plt.grid(alpha=0.3)
+
+    save_path = Path(save_dir) / 'roc_curves.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"[+] ROC curves (per-class + macro, best fold) saved: {save_path}")
+
+
+def plot_precision_recall_curves(fold_results, save_dir, num_classes: int = 2):
+    """각 fold별 Precision-Recall curve 그리기 (multiclass: per-class + macro)"""
+    if num_classes > 2:
+        _plot_pr_curves_multiclass(fold_results, save_dir, num_classes=num_classes)
+        return
+
     plt.figure(figsize=(10, 8))
 
     for fold_result in fold_results:
@@ -329,6 +485,42 @@ def plot_precision_recall_curves(fold_results, save_dir):
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"[+] Precision-Recall curves saved: {save_path}")
+
+
+def _plot_pr_curves_multiclass(fold_results, save_dir, num_classes: int):
+    """Best fold 기준 per-class PR curve + macro curve를 한 그림에 표시."""
+    class_names = get_tert_class_names(num_classes=num_classes)
+    best_fold = max(fold_results, key=lambda r: get_test_metrics(r)['auc'])
+
+    pr_per_class = best_fold.get('test_pr_per_class', {})
+    pr_macro = best_fold.get('test_pr_macro', {})
+
+    plt.figure(figsize=(10, 8))
+    for class_name in class_names:
+        curve = pr_per_class.get(class_name)
+        if not curve:
+            continue
+        pr_auc = curve.get('auc', 0.5)
+        plt.plot(curve['recall'], curve['precision'], alpha=0.7, linewidth=2,
+                  label=f"{class_name} (AUC = {pr_auc:.3f})")
+
+    if pr_macro:
+        macro_auc = pr_macro.get('auc', 0.5)
+        plt.plot(pr_macro['recall'], pr_macro['precision'], color='k', linewidth=2.5, linestyle='--',
+                  label=f"Macro-average (AUC = {macro_auc:.3f})")
+
+    plt.xlabel('Recall', fontsize=12)
+    plt.ylabel('Precision', fontsize=12)
+    plt.title(f"Precision-Recall Curves (OvR) - Fold {best_fold['fold']} - TERT 3-class", fontsize=14, fontweight='bold')
+    plt.legend(loc="best", fontsize=9)
+    plt.grid(alpha=0.3)
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+
+    save_path = Path(save_dir) / 'precision_recall_curves.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"[+] Precision-Recall curves (per-class + macro, best fold) saved: {save_path}")
 
 
 def plot_training_curves(fold_results, save_dir):
@@ -453,7 +645,7 @@ def plot_metric_comparison(fold_results, save_dir):
     print(f"[+] Metric comparison saved: {save_path}")
 
 
-def plot_confusion_matrices(fold_results, save_dir):
+def plot_confusion_matrices(fold_results, save_dir, num_classes: int = 2):
     """각 fold별 confusion matrix 시각화"""
     n_folds = len(fold_results)
     cols = min(3, n_folds)
@@ -465,26 +657,34 @@ def plot_confusion_matrices(fold_results, save_dir):
     else:
         axes = axes.flatten()
 
+    class_names = get_tert_class_names(num_classes=num_classes)
+    n = len(class_names)
+    tick_labels_pred = [f"Pred {name}" for name in class_names]
+    tick_labels_true = [f"True {name}" for name in class_names]
+
     for idx, fold_result in enumerate(fold_results):
         fold_num = fold_result['fold']
         metrics = get_test_metrics(fold_result)
 
-        cm = np.array([[metrics['tn'], metrics['fp']],
-                       [metrics['fn'], metrics['tp']]])
+        if num_classes <= 2:
+            cm = np.array([[metrics['tn'], metrics['fp']],
+                           [metrics['fn'], metrics['tp']]])
+        else:
+            cm = np.array(metrics['confusion_matrix'])
 
         im = axes[idx].imshow(cm, interpolation='nearest', cmap='Blues')
         axes[idx].set_title(f'Fold {fold_num} Confusion Matrix')
 
         plt.colorbar(im, ax=axes[idx], fraction=0.046, pad=0.04)
 
-        axes[idx].set_xticks([0, 1])
-        axes[idx].set_yticks([0, 1])
-        axes[idx].set_xticklabels(['Pred Wild', 'Pred Mutant'])
-        axes[idx].set_yticklabels(['True Wild', 'True Mutant'])
+        axes[idx].set_xticks(range(n))
+        axes[idx].set_yticks(range(n))
+        axes[idx].set_xticklabels(tick_labels_pred, rotation=45, ha='right')
+        axes[idx].set_yticklabels(tick_labels_true)
 
         thresh = cm.max() / 2.
-        for i in range(2):
-            for j in range(2):
+        for i in range(n):
+            for j in range(n):
                 axes[idx].text(j, i, format(cm[i, j], 'd'),
                              ha="center", va="center",
                              color="white" if cm[i, j] > thresh else "black",
@@ -500,7 +700,7 @@ def plot_confusion_matrices(fold_results, save_dir):
     print(f"[+] Confusion matrices saved: {save_path}")
 
 
-def generate_all_plots(fold_results, save_dir):
+def generate_all_plots(fold_results, save_dir, num_classes: int = 2):
     """
     모든 시각화 plot을 한번에 생성
     """
@@ -511,10 +711,10 @@ def generate_all_plots(fold_results, save_dir):
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    plot_roc_curves(fold_results, save_dir)
-    plot_precision_recall_curves(fold_results, save_dir)
+    plot_roc_curves(fold_results, save_dir, num_classes=num_classes)
+    plot_precision_recall_curves(fold_results, save_dir, num_classes=num_classes)
     plot_training_curves(fold_results, save_dir)
     plot_metric_comparison(fold_results, save_dir)
-    plot_confusion_matrices(fold_results, save_dir)
+    plot_confusion_matrices(fold_results, save_dir, num_classes=num_classes)
 
     print(f"\n[+] All visualizations saved in: {save_dir}")

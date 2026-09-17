@@ -11,6 +11,7 @@ Label mapping from Excel file based on 'TERT mutation' column.
 
 import os
 import json
+from collections import Counter
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -19,9 +20,18 @@ from pathlib import Path
 try:
     from .tert_common import load_tert_labels_from_excel as _load_tert_labels_from_excel
     from .tert_common import set_seed as _set_seed_common
+    from .tert_common import get_tert_class_names as _get_tert_class_names
+    from .tert_common import map_tert_class_name_to_label as _map_tert_class_name_to_label
 except ImportError:  # pragma: no cover - script execution fallback
     from tert_common import load_tert_labels_from_excel as _load_tert_labels_from_excel
     from tert_common import set_seed as _set_seed_common
+    from tert_common import get_tert_class_names as _get_tert_class_names
+    from tert_common import map_tert_class_name_to_label as _map_tert_class_name_to_label
+
+
+def get_tert_class_names(num_classes: int = 2):
+    """Return canonical class names for this TERT task."""
+    return _get_tert_class_names(num_classes=num_classes)
 
 
 class TERTWSIDataset(Dataset):
@@ -62,7 +72,13 @@ class TERTWSIDataset(Dataset):
             })
 
         labels = [wsi['label'] for wsi in self.wsi_list]
-        print(f"Dataset: {len(self.wsi_list)} WSIs (Mutant: {sum(labels)}, Wild: {len(labels) - sum(labels)})")
+        label_counts = Counter(labels)
+        class_names = get_tert_class_names(num_classes=max(label_counts.keys(), default=1) + 1)
+        count_summary = ", ".join(
+            f"{class_name}: {label_counts.get(class_idx, 0)}"
+            for class_idx, class_name in enumerate(class_names)
+        )
+        print(f"Dataset: {len(self.wsi_list)} WSIs ({count_summary})")
 
     def _select_tiles(self, features):
         """타일 선택: Random (use_variance=False) or Top-K Variance"""
@@ -92,12 +108,12 @@ class TERTWSIDataset(Dataset):
         return features, label, wsi['filename']
 
 
-def load_tert_labels_from_excel(excel_path: str) -> dict:
+def load_tert_labels_from_excel(excel_path: str, num_classes: int = 2) -> dict:
     """Excel 파일에서 TERT mutation label을 로드."""
-    return _load_tert_labels_from_excel(excel_path, verbose=True)
+    return _load_tert_labels_from_excel(excel_path, verbose=True, num_classes=num_classes)
 
 
-def load_tert_labels_from_cv_splits(cv_split_file: str) -> dict:
+def load_tert_labels_from_cv_splits(cv_split_file: str, num_classes: int = 2) -> dict:
     """
     CV split JSON 파일의 경로에서 TERT mutation label을 추출
 
@@ -109,7 +125,7 @@ def load_tert_labels_from_cv_splits(cv_split_file: str) -> dict:
         cv_split_file: CV split JSON 파일 경로
 
     Returns:
-        labels_dict: {sample_id: label} (0=Wild, 1=Mutant)
+        labels_dict: {sample_id: label}
     """
     with open(cv_split_file, 'r') as f:
         cv_data = json.load(f)
@@ -138,19 +154,18 @@ def load_tert_labels_from_cv_splits(cv_split_file: str) -> dict:
             continue
 
         # Label mapping
-        if class_name == 'Wild':
-            label = 0
-        elif class_name in ['C228T', 'C250T']:
-            label = 1
-        else:
+        try:
+            label = _map_tert_class_name_to_label(class_name, num_classes=num_classes)
+        except KeyError:
             print(f"Warning: Unknown class '{class_name}' for {filename}, skipping...")
             continue
 
         labels_dict[filename] = label
 
     print(f"Loaded {len(labels_dict)} labels from CV split paths")
-    print(f"  - Wild (0): {sum(1 for v in labels_dict.values() if v == 0)}")
-    print(f"  - Mutant (1): {sum(1 for v in labels_dict.values() if v == 1)}")
+    for idx, class_name in enumerate(get_tert_class_names(num_classes=num_classes)):
+        count = sum(1 for value in labels_dict.values() if value == idx)
+        print(f"  - {class_name} ({idx}): {count}")
 
     return labels_dict
 
@@ -229,9 +244,11 @@ if __name__ == "__main__":
     set_seed(42)
 
     # Excel에서 label 로드
-    excel_path = "/path/to/project/config/Thyroid_TC_04_8001_TC_04_8201_TERT.xlsx"
+    excel_path = "config/Thyroid_TC_04_8001_TC_04_8201_TERT.xlsx"
     labels_dict = load_tert_labels_from_excel(excel_path)
 
     print(f"\nSample labels:")
     for i, (k, v) in enumerate(list(labels_dict.items())[:5]):
-        print(f"  {k}: {v} ({'Mutant' if v == 1 else 'Wild'})")
+        label_names = get_tert_class_names(num_classes=max(labels_dict.values(), default=1) + 1)
+        display = label_names[v] if v < len(label_names) else f"Class {v}"
+        print(f"  {k}: {v} ({display})")

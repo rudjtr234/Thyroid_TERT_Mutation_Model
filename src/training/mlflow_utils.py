@@ -20,7 +20,7 @@ import pandas as pd
 import mlflow
 
 # SSL 인증서 검증 비활성화 (자체 서명된 인증서를 사용하는 MLflow 서버 허용)
-# Set MLFLOW_TRACKING_INSECURE_TLS=true in your environment if using self-signed certificates
+os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = 'true'
 
 
 # =========================
@@ -75,6 +75,7 @@ def upload_to_mlflow(
     seed: int,
     mode: Optional[str] = None,
     model_type: Optional[str] = None,
+    num_classes: Optional[int] = None,
 ):
     """
     MLflow에 학습 결과를 자동으로 업로드하는 함수
@@ -89,6 +90,7 @@ def upload_to_mlflow(
         seed: Random seed
         mode: 학습 모드(e.g., full_npy, bag 등)
         model_type: 모델 타입 (abmil/transmil)
+        num_classes: 2 (Wild vs Mutant) or 3 (Wild/C228T/C250T); JSON의 num_classes로 폴백
     """
     # JSON 로드
     with open(json_path, 'r') as f:
@@ -97,6 +99,11 @@ def upload_to_mlflow(
     folds = summary.get("folds", [])
     resolved_mode = mode or summary.get("mode") or ("bag" if bag_size else "full_npy")
     resolved_model_type = (model_type or "abmil").lower()
+    resolved_num_classes = int(num_classes if num_classes is not None else summary.get("num_classes", 2))
+    task_label = summary.get("task") or (
+        "TERT Mutation Prediction (Wild vs Mutant)" if resolved_num_classes <= 2
+        else "TERT Mutation Prediction (Wild/C228T/C250T)"
+    )
 
     # 버전 추출 (경로에서)
     version = Path(model_save_dir).name.replace("thyroid_tert_model_", "").replace("thyroid_tert_", "").replace("run_", "")
@@ -112,6 +119,8 @@ def upload_to_mlflow(
         params = {
             "version": version,
             "model_type": resolved_model_type,
+            "num_classes": resolved_num_classes,
+            "task_label": task_label,
             "optimizer": "Adam",
             "lr": lr,
             "epochs": epochs,
@@ -123,13 +132,20 @@ def upload_to_mlflow(
             params["bag_size"] = bag_size
         if resolved_mode:
             params["mode"] = resolved_mode
+        if resolved_num_classes <= 2:
+            params["threshold"] = 0.5
+        else:
+            params["threshold_mode"] = "argmax"
         mlflow.log_params(params)
 
         # Description
+        mlflow.set_tag("num_classes", resolved_num_classes)
+        mlflow.set_tag("task_label", task_label)
         mlflow.set_tag(
             "Description",
-            f"WSI -> Patch(512x512) -> UNI2 Embedding -> {resolved_model_type.upper()} -> TERT Mutation Prediction (Wild vs Mutant). "
-            f"5-fold Stratified CV(8:1:1). Model: {resolved_model_type.upper()} + UNI2(1536-dim).",
+            f"WSI -> Patch(512x512) -> UNI2 Embedding -> {resolved_model_type.upper()} -> {task_label}. "
+            f"5-fold Stratified CV(8:1:1). Model: {resolved_model_type.upper()} + UNI2(1536-dim). "
+            + ("Fixed threshold=0.5." if resolved_num_classes <= 2 else "Prediction via argmax (no fixed threshold)."),
         )
 
 

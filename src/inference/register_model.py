@@ -47,9 +47,9 @@ from mlflow.tracking import MlflowClient
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-# Set MLFLOW_TRACKING_INSECURE_TLS=true in your environment if using self-signed certificates
+os.environ["MLFLOW_TRACKING_INSECURE_TLS"] = "true"
 
-MLFLOW_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
+MLFLOW_URI = "http://localhost:5000"
 REGISTERED_MODEL_NAME = "thyr-tert"
 
 
@@ -262,23 +262,14 @@ def main():
         print(f"[+] Using existing TorchScript fp16: {torchscript_fp16_path.name}")
 
     elif args.with_torchscript:
-        from inference.export_torchscript import ABMILTERTForExport, load_weights, _export_one
+        from inference.export_torchscript import build_export_model_from_checkpoint, _export_one
         print(f"\n[*] Generating TorchScript fp16 from checkpoint ...")
-        ts_dir = ROOT / "exports" / "abmil_torchscript"
+        ts_dir = ROOT / "exports" / f"{model_type}_torchscript"
         ts_dir.mkdir(parents=True, exist_ok=True)
         ts_stem = best_path.stem  # e.g. best_model_fold2_auc1.0000
         ts_out = ts_dir / f"{ts_stem}_fp16.pt"
 
-        hp = model_hparams
-        export_model = ABMILTERTForExport(
-            in_dim=int(hp.get("in_dim", 1536)),
-            embed_dim=int(hp.get("embed_dim", 768)),
-            attn_dim=int(hp.get("attn_dim", 512)),
-            num_fc_layers=int(hp.get("num_fc_layers", 2)),
-            dropout=float(hp.get("dropout", 0.25)),
-            num_classes=int(hp.get("num_classes", 2)),
-        )
-        load_weights(export_model, str(best_path))
+        export_model, _, _, _ = build_export_model_from_checkpoint(str(best_path))
         export_model = export_model.half().eval()
         _export_one(export_model, str(ts_out), num_patches=2000, fp16=True)
         torchscript_fp16_path = ts_out

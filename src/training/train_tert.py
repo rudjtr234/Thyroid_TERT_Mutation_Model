@@ -19,6 +19,7 @@ from pathlib import Path
 import json
 import warnings
 import sys
+from collections import Counter
 from multiprocessing import cpu_count
 
 # GPU 설정 강제 (코드 최상단에서 설정)
@@ -47,6 +48,7 @@ from models.dtfd import DTFDMILTERTModel, DTFDMILTERTConfig
 from models.mhim import MHIMMILTERTModel, MHIMMILTERTConfig
 from models.clam import CLAMTERTModel, CLAMTERTConfig
 from data.datasets import TERTWSIDataset, load_tert_labels_from_cv_splits, set_seed
+from data.tert_common import get_tert_class_names, get_tert_task_label
 from evaluation.metric import (
     compute_metrics_with_confusion,
     compute_roc_curve_data,
@@ -58,6 +60,7 @@ from evaluation.metric import (
     generate_all_plots
 )
 from evaluation.visualization import generate_attention_heatmaps_from_results
+from sklearn.metrics import auc
 import torch.nn.functional as F
 from typing import Dict, List
 from torch.utils.data import DataLoader
@@ -126,7 +129,7 @@ def _resolve_model_hparams(args) -> Dict:
             'num_landmarks': int(getattr(args, 'transmil_num_landmarks', 256)),
             'pinv_iterations': int(getattr(args, 'transmil_pinv_iterations', 6)),
             'dropout': float(getattr(args, 'dropout', 0.25)),
-            'num_classes': 2,
+            'num_classes': int(getattr(args, 'num_classes', 2)),
             'use_layer_norm': use_layer_norm,
         }
 
@@ -138,7 +141,7 @@ def _resolve_model_hparams(args) -> Dict:
             'attn_dim': int(getattr(args, 'attn_dim', 384)),
             'num_fc_layers': int(getattr(args, 'num_fc_layers', 2)),
             'dropout': float(getattr(args, 'dropout', 0.25)),
-            'num_classes': 2,
+            'num_classes': int(getattr(args, 'num_classes', 2)),
             'n_token': int(getattr(args, 'acmil_n_token', 5)),
             'n_masked_patch': int(getattr(args, 'acmil_n_masked_patch', 10)),
             'mask_drop': float(getattr(args, 'acmil_mask_drop', 0.6)),
@@ -153,7 +156,7 @@ def _resolve_model_hparams(args) -> Dict:
             'attn_dim': int(getattr(args, 'attn_dim', 384)),
             'num_fc_layers': int(getattr(args, 'num_fc_layers', 2)),
             'dropout': float(getattr(args, 'dropout', 0.25)),
-            'num_classes': 2,
+            'num_classes': int(getattr(args, 'num_classes', 2)),
             'n_pseudo_bags': int(getattr(args, 'dtfd_n_pseudo_bags', 4)),
             'use_layer_norm': use_layer_norm,
         }
@@ -166,7 +169,7 @@ def _resolve_model_hparams(args) -> Dict:
             'attn_dim': int(getattr(args, 'attn_dim', 384)),
             'num_fc_layers': int(getattr(args, 'num_fc_layers', 2)),
             'dropout': float(getattr(args, 'dropout', 0.25)),
-            'num_classes': 2,
+            'num_classes': int(getattr(args, 'num_classes', 2)),
             'mask_ratio': float(getattr(args, 'mhim_mask_ratio', 0.5)),
             'ema_decay': float(getattr(args, 'mhim_ema_decay', 0.999)),
             'use_layer_norm': use_layer_norm,
@@ -180,7 +183,7 @@ def _resolve_model_hparams(args) -> Dict:
             'attn_dim': int(getattr(args, 'attn_dim', 384)),
             'num_fc_layers': int(getattr(args, 'num_fc_layers', 2)),
             'dropout': float(getattr(args, 'dropout', 0.25)),
-            'num_classes': 2,
+            'num_classes': int(getattr(args, 'num_classes', 2)),
             'k_sample': int(getattr(args, 'clam_k_sample', 8)),
             'use_layer_norm': use_layer_norm,
         }
@@ -193,7 +196,7 @@ def _resolve_model_hparams(args) -> Dict:
         'attn_dim': int(getattr(args, 'attn_dim', 384)),
         'num_fc_layers': int(getattr(args, 'num_fc_layers', 2)),
         'dropout': float(getattr(args, 'dropout', 0.25)),
-        'num_classes': 2,
+        'num_classes': int(getattr(args, 'num_classes', 2)),
         'use_layer_norm': use_layer_norm,
     }
 
@@ -393,39 +396,36 @@ def check_data_leakage(cv_splits):
     return all_folds_ok
 
 
-def check_label_distribution(cv_splits, labels_dict):
-    """각 fold의 TERT label 분포 확인 (Wild vs Mutant)"""
+def check_label_distribution(cv_splits, labels_dict, num_classes: int = 2):
+    """각 fold의 TERT label 분포 확인 (binary: Wild vs Mutant / multiclass: Wild/C228T/C250T)"""
+    class_names = get_tert_class_names(num_classes=num_classes)
+
     print("\n" + "="*80)
-    print("TERT Label Distribution Analysis (Wild vs Mutant)")
+    print(f"TERT Label Distribution Analysis ({' vs '.join(class_names)})")
     print("="*80)
+
+    def count_labels(paths):
+        counts = Counter(
+            labels_dict.get(os.path.basename(p).replace('.npy', '').replace('.pt', ''), 0)
+            for p in paths
+        )
+        return [counts.get(idx, 0) for idx in range(num_classes)]
 
     for fold_data in cv_splits['folds']:
         fold_num = fold_data['fold']
 
-        # Count labels for each split
-        def count_labels(paths):
-            pos = sum(1 for p in paths if labels_dict.get(os.path.basename(p).replace('.npy', '').replace('.pt', ''), 0) == 1)
-            neg = len(paths) - pos
-            return pos, neg
-
-        train_pos, train_neg = count_labels(fold_data['train_wsis_paths'])
-        val_pos, val_neg = count_labels(fold_data['val_wsis_paths'])
-        test_pos, test_neg = count_labels(fold_data['test_wsis_paths'])
-
-        train_total = train_pos + train_neg
-        val_total = val_pos + val_neg
-        test_total = test_pos + test_neg
+        train_counts = count_labels(fold_data['train_wsis_paths'])
+        val_counts = count_labels(fold_data['val_wsis_paths'])
+        test_counts = count_labels(fold_data['test_wsis_paths'])
 
         print(f"\nFold {fold_num}:")
-        print(f"  Train: Mutant={train_pos:3d} ({train_pos/train_total*100 if train_total > 0 else 0:5.1f}%), "
-              f"Wild={train_neg:3d} ({train_neg/train_total*100 if train_total > 0 else 0:5.1f}%), "
-              f"Total={train_total:3d}")
-        print(f"  Val  : Mutant={val_pos:3d} ({val_pos/val_total*100 if val_total > 0 else 0:5.1f}%), "
-              f"Wild={val_neg:3d} ({val_neg/val_total*100 if val_total > 0 else 0:5.1f}%), "
-              f"Total={val_total:3d}")
-        print(f"  Test : Mutant={test_pos:3d} ({test_pos/test_total*100 if test_total > 0 else 0:5.1f}%), "
-              f"Wild={test_neg:3d} ({test_neg/test_total*100 if test_total > 0 else 0:5.1f}%), "
-              f"Total={test_total:3d}")
+        for split_name, counts in [("Train", train_counts), ("Val  ", val_counts), ("Test ", test_counts)]:
+            total = sum(counts)
+            parts = ", ".join(
+                f"{name}={count:3d} ({count/total*100 if total > 0 else 0:5.1f}%)"
+                for name, count in zip(class_names, counts)
+            )
+            print(f"  {split_name}: {parts}, Total={total:3d}")
 
     print("\n" + "="*80 + "\n")
 
@@ -433,8 +433,39 @@ def check_label_distribution(cv_splits, labels_dict):
 # =========================
 # Training Loop (threshold=0.5 고정)
 # =========================
-def run_one_epoch(model, dataloader, device, optimizer=None, train=False, threshold=0.5):
-    """Training/Validation with fixed threshold=0.5"""
+def _probs_and_preds_from_logits(logits, threshold: float, num_classes: int):
+    """
+    num_classes=2: probs = P(Mutant) [N], preds via fixed threshold
+    num_classes>2: probs = full softmax [N, C], preds via argmax
+    """
+    softmax = torch.softmax(logits, dim=1)
+    if num_classes <= 2:
+        probs = softmax[:, 1]
+        preds = (probs >= threshold).long()
+        return probs, preds
+    preds = torch.argmax(softmax, dim=1)
+    return softmax, preds
+
+
+def _empty_metrics(num_classes: int) -> Dict:
+    if num_classes <= 2:
+        return {
+            "accuracy": 0.0, "auc": 0.5,
+            "sensitivity": 0.0, "specificity": 0.0,
+            "ppv": 0.0, "npv": 0.0,
+            "f1": 0.0, "tp": 0, "tn": 0, "fp": 0, "fn": 0
+        }
+    return {
+        "accuracy": 0.0, "auc": 0.5,
+        "sensitivity": 0.0, "specificity": 0.0,
+        "ppv": 0.0, "npv": 0.0,
+        "f1": 0.0, "confusion_matrix": [[0] * num_classes for _ in range(num_classes)],
+        "per_class": {}, "missing_classes_in_eval": [],
+    }
+
+
+def run_one_epoch(model, dataloader, device, optimizer=None, train=False, threshold=0.5, num_classes: int = 2):
+    """Training/Validation with fixed threshold=0.5 (binary) or argmax (multiclass)"""
     if train:
         model.train()
     else:
@@ -462,8 +493,7 @@ def run_one_epoch(model, dataloader, device, optimizer=None, train=False, thresh
                 logits = results_dict['logits']
 
             total_loss += loss.item()
-            probs = torch.softmax(logits, dim=1)[:, 1]
-            preds = (probs >= threshold).long()
+            probs, preds = _probs_and_preds_from_logits(logits, threshold, num_classes)
 
             all_probs.extend(probs.cpu().detach().numpy())
             all_preds.extend(preds.cpu().numpy())
@@ -472,14 +502,9 @@ def run_one_epoch(model, dataloader, device, optimizer=None, train=False, thresh
     avg_loss = total_loss / len(dataloader) if len(dataloader) > 0 else 0
 
     if all_labels:
-        metrics = compute_metrics_with_confusion(all_labels, all_preds, all_probs)
+        metrics = compute_metrics_with_confusion(all_labels, all_preds, all_probs, num_classes=num_classes)
     else:
-        metrics = {
-            "accuracy": 0.0, "auc": 0.5,
-            "sensitivity": 0.0, "specificity": 0.0,
-            "ppv": 0.0, "npv": 0.0,
-            "f1": 0.0, "tp": 0, "tn": 0, "fp": 0, "fn": 0
-        }
+        metrics = _empty_metrics(num_classes)
 
     metrics["loss"] = avg_loss
     return metrics
@@ -495,6 +520,7 @@ def evaluate_full_wsi_for_test_direct(
     device: torch.device,
     threshold: float = 0.5,
     model_type: str = "abmil",
+    num_classes: int = 2,
 ):
     """
     Test evaluation with FULL WSI (all patches) - NPY 경로 직접 사용
@@ -576,8 +602,13 @@ def evaluate_full_wsi_for_test_direct(
                     )
                     logits = results_dict['logits']
 
-            probs = torch.softmax(logits, dim=1)[:, 1]
-            pred = (probs >= threshold).long()
+            all_class_probs, pred = _probs_and_preds_from_logits(logits, threshold, num_classes)
+            if num_classes <= 2:
+                probs = all_class_probs
+                pred_confidence = probs
+            else:
+                probs = all_class_probs.gather(1, pred.unsqueeze(1)).squeeze(1)
+                pred_confidence = probs
 
             # Attention/Attribution 저장
             if use_transmil_attr:
@@ -587,6 +618,8 @@ def evaluate_full_wsi_for_test_direct(
                     'n_patches': len(attn_scores),
                     'predicted_label': int(pred.cpu().numpy()[0]),
                     'pred_prob': float(probs.cpu().numpy()[0]),
+                    'pred_confidence': float(pred_confidence.cpu().numpy()[0]),
+                    'class_probs': all_class_probs.cpu().numpy()[0].tolist() if num_classes > 2 else None,
                     'true_label': int(true_label),
                     'model_type': str(model_type).lower(),
                     'score_type': 'transmil_b_attribution',
@@ -628,19 +661,25 @@ def evaluate_full_wsi_for_test_direct(
                     'n_patches': len(attn_scores),
                     'predicted_label': int(pred.cpu().numpy()[0]),
                     'pred_prob': float(probs.cpu().numpy()[0]),
+                    'pred_confidence': float(pred_confidence.cpu().numpy()[0]),
+                    'class_probs': all_class_probs.cpu().numpy()[0].tolist() if num_classes > 2 else None,
                     'true_label': int(true_label),
                     'model_type': str(model_type).lower(),
                     'score_type': 'attention',
                 }
 
             # Metrics 계산용
-            all_probs.append(float(probs.cpu().numpy()[0]))
+            if num_classes <= 2:
+                all_probs.append(float(probs.cpu().numpy()[0]))
+            else:
+                all_probs.append(all_class_probs.cpu().numpy()[0].tolist())
             all_labels.append(int(true_label))
             all_preds.append(int(pred.cpu().numpy()[0]))
 
-            label_str = "Mutant" if true_label == 1 else "Wild"
-            pred_str = "Mutant" if pred.item() == 1 else "Wild"
-            print(f"[+] {wsi_name}: {n_patches} patches, prob={probs.item():.4f}, pred={pred_str}, true={label_str}")
+            class_names = get_tert_class_names(num_classes=num_classes)
+            label_str = class_names[true_label] if true_label < len(class_names) else str(true_label)
+            pred_str = class_names[pred.item()] if pred.item() < len(class_names) else str(pred.item())
+            print(f"[+] {wsi_name}: {n_patches} patches, prob={pred_confidence.item():.4f}, pred={pred_str}, true={label_str}")
             successful += 1
 
         except Exception as e:
@@ -656,14 +695,9 @@ def evaluate_full_wsi_for_test_direct(
 
     # Metrics 계산
     if all_labels:
-        metrics = compute_metrics_with_confusion(all_labels, all_preds, all_probs)
+        metrics = compute_metrics_with_confusion(all_labels, all_preds, all_probs, num_classes=num_classes)
     else:
-        metrics = {
-            "accuracy": 0.0, "auc": 0.5,
-            "sensitivity": 0.0, "specificity": 0.0,
-            "ppv": 0.0, "npv": 0.0,
-            "f1": 0.0, "tp": 0, "tn": 0, "fp": 0, "fn": 0
-        }
+        metrics = _empty_metrics(num_classes)
 
     return metrics, all_probs, all_labels, attention_scores_dict
 
@@ -677,7 +711,8 @@ def evaluate_full_wsi_for_validation(
     labels_dict: dict,
     device: torch.device,
     threshold: float = 0.5,
-    verbose: bool = False
+    verbose: bool = False,
+    num_classes: int = 2,
 ):
     """
     Validation evaluation with FULL WSI (all patches) - 간소화 버전
@@ -729,11 +764,13 @@ def evaluate_full_wsi_for_validation(
 
                 logits = results_dict['logits']
                 loss = results_dict['loss']
-                probs = torch.softmax(logits, dim=1)[:, 1]
-                pred = (probs >= threshold).long()
+                probs, pred = _probs_and_preds_from_logits(logits, threshold, num_classes)
 
                 total_loss += loss.item()
-                all_probs.append(float(probs.cpu().numpy()[0]))
+                if num_classes <= 2:
+                    all_probs.append(float(probs.cpu().numpy()[0]))
+                else:
+                    all_probs.append(probs.cpu().numpy()[0].tolist())
                 all_labels.append(int(true_label))
                 all_preds.append(int(pred.cpu().numpy()[0]))
                 processed_count += 1
@@ -747,14 +784,9 @@ def evaluate_full_wsi_for_validation(
     avg_loss = total_loss / processed_count if processed_count > 0 else 0.0
 
     if all_labels:
-        metrics = compute_metrics_with_confusion(all_labels, all_preds, all_probs)
+        metrics = compute_metrics_with_confusion(all_labels, all_preds, all_probs, num_classes=num_classes)
     else:
-        metrics = {
-            "accuracy": 0.0, "auc": 0.5,
-            "sensitivity": 0.0, "specificity": 0.0,
-            "ppv": 0.0, "npv": 0.0,
-            "f1": 0.0, "tp": 0, "tn": 0, "fp": 0, "fn": 0
-        }
+        metrics = _empty_metrics(num_classes)
 
     metrics["loss"] = avg_loss
     return metrics
@@ -763,11 +795,105 @@ def evaluate_full_wsi_for_validation(
 # =========================
 # K-Fold CV (Fixed Threshold, AUC-based Early Stopping)
 # =========================
+def _compute_ovr_roc_pr(test_labels, test_probs_matrix, num_classes: int):
+    """
+    Per-class OvR ROC/PR curves + macro-average curve (4.5절 스키마).
+
+    Returns:
+        roc_per_class: {class_name: {"fpr": [...], "tpr": [...], "auc": float}}
+        roc_macro: {"fpr": [...], "tpr": [...], "auc": float}
+        pr_per_class: {class_name: {"precision": [...], "recall": [...]}}
+        pr_macro: {"precision": [...], "recall": [...]}
+    """
+    from sklearn.metrics import roc_curve as _roc_curve, precision_recall_curve as _pr_curve, roc_auc_score as _roc_auc_score
+
+    class_names = get_tert_class_names(num_classes=num_classes)
+    y_true = np.asarray(test_labels)
+    y_prob = np.asarray(test_probs_matrix)
+
+    roc_per_class, pr_per_class = {}, {}
+    all_fpr_grid = np.linspace(0, 1, 100)
+    tprs_for_macro = []
+
+    for class_idx, class_name in enumerate(class_names):
+        class_true = (y_true == class_idx).astype(int)
+        if len(set(class_true.tolist())) < 2:
+            continue
+        fpr, tpr, _ = _roc_curve(class_true, y_prob[:, class_idx])
+        class_auc = float(_roc_auc_score(class_true, y_prob[:, class_idx]))
+        roc_per_class[class_name] = {"fpr": fpr.tolist(), "tpr": tpr.tolist(), "auc": class_auc}
+
+        interp_tpr = np.interp(all_fpr_grid, fpr, tpr)
+        interp_tpr[0] = 0.0
+        tprs_for_macro.append(interp_tpr)
+
+        precision, recall, _ = _pr_curve(class_true, y_prob[:, class_idx])
+        # precision_recall_curve는 recall 내림차순으로 반환하므로 auc() 계산 전 오름차순 정렬 필요
+        pr_auc = float(auc(recall[::-1], precision[::-1]))
+        pr_per_class[class_name] = {
+            "precision": precision.tolist(), "recall": recall.tolist(), "auc": pr_auc,
+        }
+
+    if tprs_for_macro:
+        mean_tpr = np.mean(tprs_for_macro, axis=0)
+        mean_tpr[-1] = 1.0
+        macro_auc = float(auc(all_fpr_grid, mean_tpr))
+        roc_macro = {"fpr": all_fpr_grid.tolist(), "tpr": mean_tpr.tolist(), "auc": macro_auc}
+    else:
+        roc_macro = {"fpr": [0.0, 1.0], "tpr": [0.0, 1.0], "auc": 0.5}
+
+    if pr_per_class:
+        recall_grid = np.linspace(0, 1, 100)
+        precisions_for_macro = []
+        for curve in pr_per_class.values():
+            # precision_recall_curve returns recall in descending order; sort ascending for interp
+            recall_arr = np.array(curve["recall"])[::-1]
+            precision_arr = np.array(curve["precision"])[::-1]
+            precisions_for_macro.append(np.interp(recall_grid, recall_arr, precision_arr))
+        mean_precision = np.mean(precisions_for_macro, axis=0)
+        macro_pr_auc = float(auc(recall_grid, mean_precision))
+        pr_macro = {"precision": mean_precision.tolist(), "recall": recall_grid.tolist(), "auc": macro_pr_auc}
+    else:
+        pr_macro = {"precision": [1.0, 0.0], "recall": [0.0, 1.0], "auc": 0.5}
+
+    return roc_per_class, roc_macro, pr_per_class, pr_macro
+
+
+def _print_test_results_table(test_metrics_optimal, optimal_threshold, num_classes: int, n_attention_samples: int):
+    mode_str = f"Threshold={optimal_threshold:.2f}" if num_classes <= 2 else "Prediction=argmax"
+    print(f"\n[*] Test Results with FULL WSI ({mode_str}):")
+    print(f"{'-'*80}")
+    print(f"{'Metric':<15} {'Value':<10}")
+    print(f"{'-'*80}")
+    print(f"{'AUC':<15} {test_metrics_optimal['auc']:<10.4f}")
+    print(f"{'Accuracy':<15} {test_metrics_optimal['accuracy']:<10.4f}")
+    print(f"{'F1-Score':<15} {test_metrics_optimal['f1']:<10.4f}")
+    print(f"{'Sensitivity':<15} {test_metrics_optimal['sensitivity']:<10.4f}")
+    print(f"{'Specificity':<15} {test_metrics_optimal['specificity']:<10.4f}")
+    print(f"{'PPV':<15} {test_metrics_optimal['ppv']:<10.4f}")
+    print(f"{'NPV':<15} {test_metrics_optimal['npv']:<10.4f}")
+    print(f"{'-'*80}")
+    if num_classes <= 2:
+        print(f"{'TP':<15} {test_metrics_optimal['tp']:<10}")
+        print(f"{'TN':<15} {test_metrics_optimal['tn']:<10}")
+        print(f"{'FP':<15} {test_metrics_optimal['fp']:<10}")
+        print(f"{'FN':<15} {test_metrics_optimal['fn']:<10}")
+    else:
+        print("Confusion Matrix:")
+        for row in test_metrics_optimal['confusion_matrix']:
+            print(f"  {row}")
+        if test_metrics_optimal.get('missing_classes_in_eval'):
+            print(f"[!] Missing classes in eval: {test_metrics_optimal['missing_classes_in_eval']}")
+    print(f"{'-'*80}")
+    print(f"[+] Used FULL WSI for {n_attention_samples} test samples\n")
+
+
 def run_k_fold_cv(cv_splits, labels_dict, args, device):
     all_fold_results = []
     all_predictions, all_true_labels = [], []
     saved_model_paths = []
     model_hparams = _resolve_model_hparams(args)
+    num_classes = int(getattr(args, 'num_classes', 2))
 
     for fold_data in cv_splits['folds']:
         fold_idx = fold_data['fold'] - 1
@@ -777,7 +903,10 @@ def run_k_fold_cv(cv_splits, labels_dict, args, device):
 
         print(f"\n{'='*80}")
         print(f"Fold {fold_data['fold']}/{len(cv_splits['folds'])}")
-        print(f"Fixed threshold (0.5) - Loss-based Early Stopping")
+        print(
+            "Fixed threshold (0.5) - Loss-based Early Stopping" if num_classes <= 2
+            else "Argmax prediction - Loss-based Early Stopping"
+        )
         print(f"Model type: {model_hparams['model_type']}")
         if hasattr(args, 'test_fold') and args.test_fold is not None:
             print(f"[!] TEST MODE: Running only Fold {args.test_fold}")
@@ -814,10 +943,10 @@ def run_k_fold_cv(cv_splits, labels_dict, args, device):
 
         # Training
         for epoch in range(args.epochs):
-            train_metrics = run_one_epoch(model, train_loader, device, optimizer, train=True, threshold=0.5)
+            train_metrics = run_one_epoch(model, train_loader, device, optimizer, train=True, threshold=0.5, num_classes=num_classes)
             # Validation with FULL WSI (all patches)
             val_metrics = evaluate_full_wsi_for_validation(
-                model, fold_data['val_wsis_paths'], labels_dict, device, threshold=0.5
+                model, fold_data['val_wsis_paths'], labels_dict, device, threshold=0.5, num_classes=num_classes
             )
             scheduler.step(val_metrics["loss"])
 
@@ -854,7 +983,10 @@ def run_k_fold_cv(cv_splits, labels_dict, args, device):
         # Test Set 평가 (FULL WSI - 전체 패치 사용)
         # ============================================================
         print(f"\n{'='*80}")
-        print(f"Testing with FULL WSI (all patches) - Threshold=0.5")
+        print(
+            "Testing with FULL WSI (all patches) - Threshold=0.5" if num_classes <= 2
+            else "Testing with FULL WSI (all patches) - Prediction=argmax"
+        )
         print(f"{'='*80}")
 
         optimal_threshold = 0.5
@@ -868,6 +1000,7 @@ def run_k_fold_cv(cv_splits, labels_dict, args, device):
                 device,
                 threshold=optimal_threshold,
                 model_type=getattr(args, 'model_type', 'abmil'),
+                num_classes=num_classes,
             )
 
         if len(test_labels) == 0 or len(test_probs) == 0:
@@ -876,34 +1009,25 @@ def run_k_fold_cv(cv_splits, labels_dict, args, device):
                 "Check model forward/attribution extraction errors in the test logs."
             )
 
-        # ROC/PR curve
-        fpr, tpr, _ = compute_roc_curve_data(test_labels, test_probs)
-        precision, recall, _ = compute_precision_recall_curve_data(test_labels, test_probs)
+        # ROC/PR curve (4.5절: binary는 단일 curve, multiclass는 per-class + macro 둘 다 저장)
+        if num_classes <= 2:
+            fpr, tpr, _ = compute_roc_curve_data(test_labels, test_probs)
+            precision, recall, _ = compute_precision_recall_curve_data(test_labels, test_probs)
+        else:
+            roc_per_class, roc_macro, pr_per_class, pr_macro = _compute_ovr_roc_pr(
+                test_labels, test_probs, num_classes=num_classes
+            )
 
         # 결과 출력
-        print(f"\n[*] Test Results with FULL WSI (Threshold={optimal_threshold:.2f}):")
-        print(f"{'-'*80}")
-        print(f"{'Metric':<15} {'Value':<10}")
-        print(f"{'-'*80}")
-        print(f"{'AUC':<15} {test_metrics_optimal['auc']:<10.4f}")
-        print(f"{'Accuracy':<15} {test_metrics_optimal['accuracy']:<10.4f}")
-        print(f"{'F1-Score':<15} {test_metrics_optimal['f1']:<10.4f}")
-        print(f"{'Sensitivity':<15} {test_metrics_optimal['sensitivity']:<10.4f}")
-        print(f"{'Specificity':<15} {test_metrics_optimal['specificity']:<10.4f}")
-        print(f"{'PPV':<15} {test_metrics_optimal['ppv']:<10.4f}")
-        print(f"{'NPV':<15} {test_metrics_optimal['npv']:<10.4f}")
-        print(f"{'-'*80}")
-        print(f"{'TP':<15} {test_metrics_optimal['tp']:<10}")
-        print(f"{'TN':<15} {test_metrics_optimal['tn']:<10}")
-        print(f"{'FP':<15} {test_metrics_optimal['fp']:<10}")
-        print(f"{'FN':<15} {test_metrics_optimal['fn']:<10}")
-        print(f"{'-'*80}")
-        print(f"[+] Used FULL WSI for {len(full_attention_scores)} test samples\n")
+        _print_test_results_table(test_metrics_optimal, optimal_threshold, num_classes, len(full_attention_scores))
 
         # Fold 결과 출력
         print_fold_table(fold_data['fold'], best_train_metrics, best_val_metrics, test_metrics_optimal)
 
         # Fold 결과 저장
+        # 판정 로직에는 항상 optimal_threshold(=0.5)를 넘기지만(num_classes>2에서는 내부적으로 무시되고 argmax 사용),
+        # 메타데이터로 저장/표기되는 threshold 값은 3-class에서 "argmax"로 명시해 혼동을 막는다.
+        reported_threshold = optimal_threshold if num_classes <= 2 else "argmax"
         fold_result = {
             "fold": fold_data['fold'],
             "train_size": len(train_dataset),
@@ -913,15 +1037,22 @@ def run_k_fold_cv(cv_splits, labels_dict, args, device):
             "best_train_metrics": best_train_metrics,
             "best_val_metrics": best_val_metrics,
             "test_metrics_optimal": test_metrics_optimal,
-            "optimal_threshold": optimal_threshold,
+            "optimal_threshold": reported_threshold,
             "optimal_val_f1": best_val_metrics.get("f1", 0.0),
             "history": history,
-            "test_fpr": fpr.tolist(),
-            "test_tpr": tpr.tolist(),
-            "test_precision": precision.tolist(),
-            "test_recall": recall.tolist(),
             "full_attention_scores": full_attention_scores
         }
+
+        if num_classes <= 2:
+            fold_result["test_fpr"] = fpr.tolist()
+            fold_result["test_tpr"] = tpr.tolist()
+            fold_result["test_precision"] = precision.tolist()
+            fold_result["test_recall"] = recall.tolist()
+        else:
+            fold_result["test_roc_per_class"] = roc_per_class
+            fold_result["test_roc_macro"] = roc_macro
+            fold_result["test_pr_per_class"] = pr_per_class
+            fold_result["test_pr_macro"] = pr_macro
 
         all_fold_results.append(fold_result)
         all_predictions.extend(test_probs)
@@ -982,13 +1113,15 @@ def run_training(args):
     if not Path(args.cv_split_file).exists():
         raise ValueError(f"CV split file not found: {args.cv_split_file}")
 
+    num_classes = int(getattr(args, 'num_classes', 2))
+
     # Load labels from CV split paths
-    labels_dict = load_tert_labels_from_cv_splits(args.cv_split_file)
+    labels_dict = load_tert_labels_from_cv_splits(args.cv_split_file, num_classes=num_classes)
 
     # Data validation
     cv_splits = load_cv_splits_with_paths(args.cv_split_file, labels_dict, debug=args.debug)
     leakage_check_passed = check_data_leakage(cv_splits)
-    check_label_distribution(cv_splits, labels_dict)
+    check_label_distribution(cv_splits, labels_dict, num_classes=num_classes)
 
     if not leakage_check_passed:
         raise RuntimeError("Data leakage detected. Training aborted.")
@@ -998,12 +1131,16 @@ def run_training(args):
         run_k_fold_cv(cv_splits, labels_dict, args, device)
 
     # Summary 출력
+    summary_mode_str = "Threshold=0.5" if num_classes <= 2 else "Prediction=argmax"
     print(f"\n{'='*80}")
-    print(f"Summary Statistics - FULL WSI TEST (Threshold=0.5)")
+    print(f"Summary Statistics - FULL WSI TEST ({summary_mode_str})")
     print(f"Model Type: {args.model_type}")
     print(f"{'='*80}\n")
     print_summary_statistics(summary_stats_optimal)
-    print_confusion_matrix_summary([{**r, 'test_metrics': r['test_metrics_optimal']} for r in fold_results])
+    print_confusion_matrix_summary(
+        [{**r, 'test_metrics': r['test_metrics_optimal']} for r in fold_results],
+        num_classes=num_classes,
+    )
 
     # Results 저장
     print(f"\n{'='*80}")
@@ -1011,14 +1148,19 @@ def run_training(args):
     print(f"{'='*80}")
 
     cv_summary_optimal = {
-        "task": "TERT Mutation Prediction (Wild vs Mutant)",
+        "task": get_tert_task_label(num_classes=num_classes),
+        "num_classes": num_classes,
+        "class_names": get_tert_class_names(num_classes=num_classes),
+        "cv_split_file": str(Path(args.cv_split_file).resolve()),
         "model_type": getattr(args, 'model_type', 'abmil'),
-        "threshold": "fixed (0.5)",
-        "fixed_threshold": 0.5,
+        "threshold": "fixed (0.5)" if num_classes <= 2 else "argmax",
+        "threshold_mode": "fixed_0.5" if num_classes <= 2 else "argmax",
         "test_mode": "FULL_WSI (all patches)",
         "summary_statistics": summary_stats_optimal,
         "folds": []
     }
+    if num_classes <= 2:
+        cv_summary_optimal["fixed_threshold"] = 0.5
 
     for fold_result in fold_results:
         fold_summary = {
@@ -1032,11 +1174,17 @@ def run_training(args):
             "best_val_metrics": fold_result['best_val_metrics'],
             "test_metrics": fold_result['test_metrics_optimal'],
             "history": fold_result['history'],
-            "test_fpr": fold_result['test_fpr'],
-            "test_tpr": fold_result['test_tpr'],
-            "test_precision": fold_result['test_precision'],
-            "test_recall": fold_result['test_recall']
         }
+        if num_classes <= 2:
+            fold_summary["test_fpr"] = fold_result['test_fpr']
+            fold_summary["test_tpr"] = fold_result['test_tpr']
+            fold_summary["test_precision"] = fold_result['test_precision']
+            fold_summary["test_recall"] = fold_result['test_recall']
+        else:
+            fold_summary["test_roc_per_class"] = fold_result['test_roc_per_class']
+            fold_summary["test_roc_macro"] = fold_result['test_roc_macro']
+            fold_summary["test_pr_per_class"] = fold_result['test_pr_per_class']
+            fold_summary["test_pr_macro"] = fold_result['test_pr_macro']
         cv_summary_optimal["folds"].append(fold_summary)
 
     # Create output directory
@@ -1057,6 +1205,8 @@ def run_training(args):
         attention_data = {
             "fold": fold_num,
             "model_type": getattr(args, 'model_type', 'abmil'),
+            "num_classes": num_classes,
+            "cv_split_file": str(Path(args.cv_split_file).resolve()),
             "attention_scores": fold_result['full_attention_scores']
         }
         attention_path = attention_dir / f"attention_scores_fold{fold_num}.json"
@@ -1064,14 +1214,15 @@ def run_training(args):
             json.dump(convert_numpy(attention_data), f, indent=2)
         print(f"[+] Fold {fold_num} attention scores saved: {attention_path}")
 
+    saved_summary_mode = "threshold=0.5" if num_classes <= 2 else "prediction=argmax"
     print(f"\n{'='*80}")
     print(f"Summary of Saved Files:")
-    print(f"  - 1 FULL WSI test summary (threshold=0.5)")
+    print(f"  - 1 FULL WSI test summary ({saved_summary_mode})")
     print(f"  - {len(fold_results)} attention score files")
     print(f"{'='*80}")
     print(f"\n[*] Final Results: 'results_cv_summary_optimal.json'")
     print(f"   Test Mode: FULL WSI (all patches)")
-    print(f"   Fixed threshold: 0.5")
+    print(f"   {'Fixed threshold: 0.5' if num_classes <= 2 else 'Prediction: argmax'}")
     print(f"{'='*80}")
 
     # Visualization
@@ -1083,7 +1234,7 @@ def run_training(args):
         print(f"Generating Visualization Plots")
         print(f"{'='*80}\n")
 
-        generate_all_plots(fold_results, viz_dir)
+        generate_all_plots(fold_results, viz_dir, num_classes=num_classes)
         print(f"Plots generated using FULL WSI results")
 
         # Attention Heatmap Generation

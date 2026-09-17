@@ -1,4 +1,3 @@
-
 #!/bin/bash
 # ============================================================
 # Thyroid TERT Mutation Prediction Training Script
@@ -11,23 +10,34 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # GPU 설정
-export CUDA_VISIBLE_DEVICES=0
+unset CUDA_VISIBLE_DEVICES
+export CUDA_VISIBLE_DEVICES=GPU-d74d0409-85c9-ba24-a0c1-d9297389ebc5
 
 # ============================================================
-# 아래 2개만 필요시 직접 수정
+# 아래 5개 변수만 필요시 직접 수정
 # ============================================================
-# UNI2-H
-# CV_SPLIT_FILE="/path/to/project/config/cv_splits_tert_5fold_seed42.json"
-# H-Optimus-0
-CV_SPLIT_FILE="/path/to/project/config/cv_splits_tert_5fold_seed42_hoptimus.json"
-MODEL_SAVE_DIR="/path/to/project/outputs/thyroid_tert_model_v0.7.2"
+# [1] UNI2-H (40x 512×512)
+# CV_SPLIT_FILE="config/cv_splits_tert_5fold_seed42.json"
+
+# [2] H-Optimus-0 (40x 구버전, v0.6.x~v0.8.x에서 사용)
+# CV_SPLIT_FILE="config/cv_splits_tert_5fold_seed42_hoptimus.json"
+
+# [3] H-Optimus-0 (20x 224×224, 최신)
+# CV_SPLIT_FILE="config/cv_splits_tert_5fold_seed42_hoptimus_20x.json"
+
+# [4] H-Optimus-0 (40x, 3-class Wild/C228T/C250T)
+CV_SPLIT_FILE="config/cv_splits_tert_5fold_seed42_hoptimus_3class.json"
+
+MODEL_SAVE_DIR="outputs/thyroid_tert_model_v0.15.9"
+
+NUM_CLASSES=3   # 2 (Wild vs Mutant) | 3 (Wild/C228T/C250T) — 3일 때는 3class CV split 사용
 
 # 학습 파라미터
 EPOCHS=100
 LR=1e-4
-BAG_SIZE=2000
+BAG_SIZE=400
 SEED=42
-MODEL_TYPE=transmil   # abmil | transmil | acmil | dtfd | mhim | clam
+MODEL_TYPE=clam   # abmil | transmil | acmil | dtfd | mhim | clam
 
 # Model 공통 파라미터 (abmil / acmil / dtfd / mhim / clam 공용)
 IN_DIM=1536
@@ -71,6 +81,7 @@ echo "============================================================"
 python main.py \
     --cv_split_file "$CV_SPLIT_FILE" \
     --model_save_dir "$MODEL_SAVE_DIR" \
+    --num_classes $NUM_CLASSES \
     --epochs $EPOCHS \
     --lr $LR \
     --bag_size $BAG_SIZE \

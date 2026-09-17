@@ -69,9 +69,10 @@ sys.path.insert(0, str(SRC_ROOT))
 
 from models.abmil import ABMILTERTConfig, ABMILTERTModel
 from models.transmil import TransMILTERTConfig, TransMILTERTModel
+from data.tert_common import get_tert_class_names
 
 
-DEFAULT_MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
+DEFAULT_MLFLOW_TRACKING_URI = "http://localhost:5000"
 DEFAULT_MLFLOW_EXPERIMENT = "thyroid_tert"
 
 
@@ -82,6 +83,7 @@ class LoadedModel:
     model: torch.nn.Module
     auc: Optional[float]
     in_dim: int
+    num_classes: int = 2
 
 
 def _parse_auc_from_filename(path: Path) -> Optional[float]:
@@ -174,6 +176,7 @@ def load_model_from_checkpoint(pt_path: Path, device: torch.device) -> LoadedMod
     model_type, model_hparams, auc = _extract_model_info_from_ckpt(ckpt)
 
     model, in_dim = _build_model(model_type=model_type, model_hparams=model_hparams)
+    num_classes = int(model_hparams.get("num_classes", 2))
 
     raw_sd = ckpt.get("model_state_dict", ckpt)
     if not isinstance(raw_sd, dict):
@@ -189,6 +192,7 @@ def load_model_from_checkpoint(pt_path: Path, device: torch.device) -> LoadedMod
         model=model,
         auc=auc,
         in_dim=in_dim,
+        num_classes=num_classes,
     )
 
 
@@ -235,12 +239,14 @@ def infer_one_slide(models: Sequence[LoadedModel], npy_path: Path, device: torch
             f"expected {expected_dim}, got {embeddings.shape[1]}"
         )
 
+    num_classes = models[0].num_classes
+
     # Inference
     _synchronize_if_cuda(device)
     t_infer_start = time.perf_counter()
     with torch.no_grad():
         h = torch.from_numpy(embeddings).float().unsqueeze(0).to(device)  # [1, N, D]
-        pos_probs = []
+        class_prob_vectors = []
         for loaded in models:
             outputs = loaded.model(
                 h=h,
@@ -249,21 +255,32 @@ def infer_one_slide(models: Sequence[LoadedModel], npy_path: Path, device: torch
             )
             logits = outputs["logits"] if isinstance(outputs, dict) else outputs[0]
             probs = F.softmax(logits, dim=-1)[0]
-            pos_probs.append(float(probs[1].detach().cpu().item()))
+            class_prob_vectors.append(probs.detach().cpu().numpy())
     _synchronize_if_cuda(device)
     t_infer = time.perf_counter() - t_infer_start
 
     t_total = time.perf_counter() - t_total_start
 
-    return {
+    # Ensemble: average class probability vectors across models.
+    mean_class_probs = np.mean(class_prob_vectors, axis=0)
+
+    result = {
         "slide_id": npy_path.stem,
         "source_npy_path": str(npy_path),
         "num_patches": int(embeddings.shape[0]),
-        "tert_mutant_prob": float(np.mean(pos_probs)),
+        # Backward-compat: P(Mutant). For num_classes=2 this is exact;
+        # for num_classes>2 it's 1 - P(Wild), Wild assumed to be class index 0.
+        "tert_mutant_prob": float(1.0 - mean_class_probs[0]),
         "sec_load": round(float(t_load), 6),
         "sec_infer": round(float(t_infer), 6),
         "sec_total": round(float(t_total), 6),
     }
+    if num_classes > 2:
+        class_names = get_tert_class_names(num_classes=num_classes)
+        result["class_probs"] = {
+            name.lower(): float(p) for name, p in zip(class_names, mean_class_probs)
+        }
+    return result
 
 
 def _compute_kpi(timings: Sequence[Dict], n_errors: int, n_models: int) -> Dict:
@@ -306,7 +323,7 @@ def _upload_kpi_to_mlflow(
 
     import mlflow
 
-    # Set MLFLOW_TRACKING_INSECURE_TLS=true in your environment if using self-signed certificates
+    os.environ["MLFLOW_TRACKING_INSECURE_TLS"] = "true"
     mlflow.set_tracking_uri(args.mlflow_tracking_uri)
     mlflow.set_experiment(args.mlflow_experiment)
 
@@ -384,6 +401,11 @@ def run_kpi_eval(args: argparse.Namespace) -> Dict:
     model_types = {x.model_type for x in loaded_models}
     if len(model_types) > 1:
         raise ValueError(f"Mixed model types detected in checkpoint_dir: {sorted(model_types)}")
+
+    # Safety: mixing binary and multiclass checkpoints makes ensemble averaging meaningless.
+    num_classes_set = {x.num_classes for x in loaded_models}
+    if len(num_classes_set) > 1:
+        raise ValueError(f"Mixed num_classes detected in checkpoint_dir: {sorted(num_classes_set)}")
 
     model_type = loaded_models[0].model_type
 

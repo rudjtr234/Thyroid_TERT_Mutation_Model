@@ -14,13 +14,13 @@ import argparse
 from pathlib import Path
 
 OLD_ROOT = "/path/to/dataset/embedding"
-NEW_ROOT = "/path/to/dataset/h_optimus_embeddings"
+NEW_ROOT = "/path/to/dataset/h_optimus_embeddings_20x"
 
 INPUT_JSON = str(
     Path(__file__).parents[2] / "config" / "cv_splits_tert_5fold_seed42.json"
 )
 OUTPUT_JSON = str(
-    Path(__file__).parents[2] / "config" / "cv_splits_tert_5fold_seed42_hoptimus.json"
+    Path(__file__).parents[2] / "config" / "cv_splits_tert_5fold_seed42_hoptimus_20x.json"
 )
 
 
