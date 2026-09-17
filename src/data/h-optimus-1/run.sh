@@ -9,7 +9,7 @@
 # 처음 쓰는 서버에서는 huggingface-cli login 후 실행할 것.
 #
 # ===== 2026-09-09 GPU 장애 이후 구성 =====
-# 101호 deepgadget에서 Xid 79("GPU has fallen off the bus")로 4장이 동시에 이탈해
+# 학습 서버에서 Xid 79("GPU has fallen off the bus")로 4장이 동시에 이탈해
 # 7장 중 3장(V100S ×2, RTX 3080 ×1)만 남았다. 공통 전원 문제로 추정되므로
 # 남은 3장을 각각 독립 작업 1개씩에 배정하고, 전력 캡을 걸어 동시 피크를 낮춘다.
 #   V100S ×2 → BRAF TCGA 40x 임베딩 (샤드 2개)
@@ -29,8 +29,8 @@ ulimit -n 65536 2>/dev/null || ulimit -n 4096 2>/dev/null || true
 # !! 실행 전 nvidia-smi --query-gpu=index,name,uuid --format=csv 로 확인할 것 !!
 RTX3080_UUID=${RTX3080_UUID:-}
 
-# 2026-09-14: ainode144(RTX 6000 Ada ×8)에서도 재개할 수 있게 후보 GPU를 넓혔다.
-# 101호 deepgadget 에서는 3080 이 먼저 잡히므로 기존 동작 그대로다.
+# 2026-09-14: RTX 6000 Ada ×8 서버에서도 재개할 수 있게 후보 GPU를 넓혔다.
+# 기존 서버에서는 3080이 먼저 잡히므로 동작은 그대로다.
 GPU_MATCH=${GPU_MATCH:-"3080|6000 Ada"}
 
 if [ -z "$RTX3080_UUID" ]; then

@@ -10,7 +10,7 @@ WSI(Whole Slide Image)에서 추출된 patch-level embedding 기반으로
 **TERT promoter mutation**(Wild vs Mutant)을 예측하는 MIL 파이프라인입니다.
 
 - Task: Binary classification (`Wild=0`, `Mutant(C228T/C250T)=1`) 또는 3-class (`Wild=0`, `C228T=1`, `C250T=2`)
-- Input: UNI2-H 또는 H-Optimus-0 기반 1536-dim patch embedding (`.npy`)
+- Input: UNI2-H / H-Optimus-0 / H-Optimus-1 기반 1536-dim patch embedding (`.npy`)
 - Eval: Stratified 5-fold CV, Test는 Full WSI(전체 patch) 평가
 
 ## Dataset
@@ -68,10 +68,18 @@ WSI(Whole Slide Image)에서 추출된 patch-level embedding 기반으로
 cd src/data/h-optimus-0
 bash run.sh
 
+# H-Optimus-1 (RTX 3080 3장, DDP, batch_size=32)
+# gated repo이므로 HuggingFace 토큰 인증 필요
+cd src/data/h-optimus-1
+bash run.sh
+
 # UNI2-H
 cd src/data/uni2-h
 bash run_embedding.sh
 ```
+
+> 추출기는 완료된 `.npy`를 건너뛰는 resume 구조라, 중단 후 같은 명령을 다시
+> 실행하면 남은 슬라이드부터 이어서 진행된다.
 
 ### 2) CV split 생성 (H-Optimus용)
 
@@ -129,6 +137,9 @@ src/
 │   ├── h-optimus-0/
 │   │   ├── extract_features.py       # H-Optimus-0 임베딩 추출 (DDP)
 │   │   └── run.sh
+│   ├── h-optimus-1/
+│   │   ├── extract_features.py       # H-Optimus-1 임베딩 추출 (DDP, resume)
+│   │   └── run.sh
 │   ├── create_cv_splits.py           # UNI2-H CV split 생성
 │   ├── create_cv_splits_hoptimus.py  # H-Optimus-0 CV split 생성 (경로 변환)
 │   ├── datasets.py
@@ -181,6 +192,40 @@ outputs/
 | H-Optimus-0 | 40x `512×512` → resize `224×224` | `/path/to/dataset/root/h_optimus_embeddings/{class}/npy/` | `v0.6.x ~ v0.8.x` | 완료 |
 | H-Optimus-0 | 20x `224×224 @ 0.5MPP` | `/path/to/dataset/root/h_optimus_embeddings_20x/{class}/npy/` | `v0.9.x ~` | 임베딩 완료 / 학습 예정 |
 | H-Optimus-0 (3-class) | 40x `512×512` | `/path/to/dataset/h_optimus_embeddings/{Wild,C228T,C250T}/npy/` | `v0.10.x ~` | 학습 진행 중 |
+| H-Optimus-1 | 40x `512×512` → resize `224×224` | `/path/to/dataset/h_optimus_1_embeddings_40x/{class}/npy/` | - | 임베딩 추출 중단 (10/201) |
+
+### H-Optimus-1 임베딩 (진행 중)
+
+기존 H-Optimus-0 파이프라인과 동일 구조에서 인코더만 교체하여, 인코더 차이에 따른
+성능 변화를 직접 비교할 수 있도록 구성하였다. BRAF 프로젝트의 H-Optimus-1 임베딩과
+배율(40x 512)을 맞춰 두 mutation 과제 간 비교도 가능하다.
+
+| 항목 | 내용 |
+|---|---|
+| 모델 | `bioptimus/H-optimus-1` (timm via HuggingFace Hub) · 약 1.1B |
+| 입력 / 출력 | 40x 512 타일 → `224×224` resize / `1536-dim float32` |
+| 정규화 | H-Optimus-0과 동일 (mean·std 상수 동일) |
+| License | CC BY-NC-ND 4.0 (상업적 사용 시 별도 협의) |
+| 대상 | 201 WSI · 총 4,273,287 패치 (WSI당 평균 21,260) |
+
+- H-Optimus-1은 **gated repo**라 HuggingFace 토큰 인증이 필요하다.
+- 정규화 상수·출력 차원이 H-Optimus-0과 동일해, 코드 차이는 **모델 ID 한 줄**뿐이다.
+- CV split은 기존 UNI2-H 5-fold의 `train/val/test` 구성을 그대로 유지하고 경로만
+  변환하므로, UNI2-H / H-Optimus-0 결과와 직접 비교가 가능하다.
+
+**안정성 조치** — 타일 수가 많은 슬라이드에서 fd 한도를 초과해
+`OSError: [Errno 24] Too many open files`로 중단되는 문제에 대해:
+
+- `torch.multiprocessing.set_sharing_strategy("file_system")` — fd를 소모하지 않는 공유 방식
+- 실행 스크립트에 `ulimit -n 65536` 설정
+- 추출기는 완료된 `.npy`를 건너뛰는 **resume 구조**(`.tmp.npy` 기록 후 rename)라
+  중단 후 재시작해도 작업 손실이 없다
+
+> **현재 상태: 중단 (2026-09-11 확인)** — 201장 중 10장(C228T, 5.0% / 타일 기준 5.3%)만
+> 완료. 기록된 10장은 무결성 확인 완료(shape·dtype·NaN·all-zero row 검사 통과).
+> 중단 사유는 코드·데이터 문제가 아니라 **실행 중 GPU 탈락에 따른 NCCL watchdog
+> timeout**과 **출력 디렉토리 쓰기 권한 문제**이며, 환경 복구 후 재실행하면 이어서
+> 진행된다.
 
 ## Experiment Results
 

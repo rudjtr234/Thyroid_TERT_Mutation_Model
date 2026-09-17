@@ -17,6 +17,7 @@
 | H-Optimus-0 | 40x→resize 224×224 | `/path/to/dataset/h_optimus_embeddings/{class}/npy/` | `config/cv_splits_tert_5fold_seed42_hoptimus.json` | v0.6.x~v0.8.x |
 | H-Optimus-0 | 20x 224×224 | `/path/to/dataset/h_optimus_embeddings_20x/{class}/npy/` | `config/cv_splits_tert_5fold_seed42_hoptimus_20x.json` | v0.9.x~ |
 | H-Optimus-0 (3-class) | 40x 512×512 | `/path/to/dataset/h_optimus_embeddings/{Wild,C228T,C250T}/npy/` | `config/cv_splits_tert_5fold_seed42_hoptimus_3class.json` | v0.10.x~ |
+| H-Optimus-1 | 40x 512×512 → 224 | `/path/to/dataset/h_optimus_1_embeddings_40x/{class}/npy/` | UNI2-H split 경로 변환 | 추출 중단 (10/201) |
 
 - 임베딩: 1536-dim float32
 - 혼용 금지: CV_SPLIT_FILE과 임베딩 경로 반드시 같은 계열 사용
@@ -48,9 +49,9 @@
 ## 실행
 
 ```bash
-# 임베딩 추출
-cd src/data/h-optimus-0 && bash run.sh      # H-Optimus-0 (V100 3장)
-cd src/data/h-optimus-1 && bash run.sh      # H-Optimus-1
+# 임베딩 추출 (완료된 .npy는 건너뛰는 resume 구조)
+cd src/data/h-optimus-0 && bash run.sh      # H-Optimus-0 (V100 3장, bs=512)
+cd src/data/h-optimus-1 && bash run.sh      # H-Optimus-1 (RTX 3080 3장, bs=32, HF 토큰 필요)
 cd src/data/uni2-h && bash run_embedding.sh # UNI2-H
 
 # CV split 생성 (H-Optimus용)
@@ -90,3 +91,10 @@ python src/inference/register_model.py --model_save_dir outputs/thyroid_tert_mod
 - Attention heatmap 색상: Mutant = 짙은파랑→빨강 / Wild = 옅은파랑→짙은파랑 (`visualization.py`)
 - `register_model.py`는 `--with_torchscript` 사용 시 체크포인트에서 모델 타입을 읽어
   TorchScript를 생성한다 (ABMIL 외 모델도 지원).
+- 임베딩 추출 중 `OSError: [Errno 24] Too many open files` 방지:
+  `torch.multiprocessing.set_sharing_strategy("file_system")` + `ulimit -n 65536`
+  (타일 수가 많은 슬라이드에서 fd 한도 초과로 중단됨)
+- H-Optimus-1은 gated repo — HuggingFace 토큰 인증 필요, 토큰·모델 캐시는 서버별로 별도 설정
+- H-Optimus-1 정규화 상수·출력 차원은 H-Optimus-0과 동일 (코드 차이는 모델 ID 한 줄)
+- **H-Optimus-1 임베딩은 201장 중 10장(5%)에서 중단된 상태.** 사유는 GPU 탈락에 따른
+  NCCL watchdog timeout + 출력 디렉토리 쓰기 권한 문제. 환경 복구 후 재실행하면 이어서 진행됨
