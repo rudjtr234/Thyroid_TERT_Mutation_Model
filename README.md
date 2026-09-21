@@ -28,6 +28,7 @@ WSI(Whole Slide Image)에서 추출한 patch-level embedding 기반으로 **TERT
 | `embedding/` | 201 `.npy` + 201 `.json` + 3 `all_slides.json` | 25.22 GiB | UNI2-H 40x |
 | `h_optimus_embeddings/` | 201 `.npy` + 201 `.json` + 3 `all_slides.json` | 25.24 GiB | H-Optimus-0 40x |
 | `h_optimus_embeddings_20x/` | 201 `.npy` + 201 `.json` + 3 `all_slides.json` | 31.06 GiB | H-Optimus-0 20x |
+| `h_optimus_1_embeddings_40x/` | 201 `.npy` + 201 `.json` + 3 `all_slides.json` | 26 GiB | H-Optimus-1 40x (2026-09-18 확인) |
 
 > `20x_patch/`의 regular file 총수 `5,259,206` 중 `201`개는 슬라이드별 완료 표시용 `*.done`.
 > 각 embedding 디렉터리의 regular file 총수 `405`개 = slide-level metadata 201 + 클래스별 `all_slides.json` 3.
@@ -40,13 +41,15 @@ WSI(Whole Slide Image)에서 추출한 patch-level embedding 기반으로 **TERT
 | H-Optimus-0 | 40x `512×512` → resize `224×224` | `v0.6.x ~ v0.8.x` | 완료 |
 | H-Optimus-0 | 20x `224×224 @ 0.5MPP` | `v0.9.x ~` | 임베딩 완료 / 학습 예정 |
 | H-Optimus-0 (3-class) | 40x `512×512` | `v0.10.x ~` | 학습 진행 중 |
-| H-Optimus-1 | 40x `512×512` → resize `224×224` | - | 추출 중단 (10/201) |
+| H-Optimus-1 | 40x `512×512` → resize `224×224` | `v0.11.x ~` | 임베딩 완료 / 학습 예정 |
 
 경로는 각각 `{dataset_root}/{embedding, h_optimus_embeddings, h_optimus_embeddings_20x, h_optimus_1_embeddings_40x}/{class}/npy/`.
 
-**H-Optimus-1 (중단, 2026-09-11 확인)** — `bioptimus/H-optimus-1` (timm/HF Hub, ~1.1B, CC BY-NC-ND 4.0). 정규화 상수·출력 차원이 H-Optimus-0과 동일해 코드 차이는 모델 ID 한 줄뿐이며, CV split도 경로만 변환해 UNI2-H / H-Optimus-0 결과와 직접 비교가 가능하다. gated repo이므로 HF 토큰 인증 필요.
+**H-Optimus-1 (임베딩 완료, 2026-09-18 확인)** — `bioptimus/H-optimus-1` (timm/HF Hub, ~1.1B, CC BY-NC-ND 4.0). 정규화 상수·출력 차원이 H-Optimus-0과 동일해 코드 차이는 모델 ID 한 줄뿐이며, CV split도 경로만 변환해 UNI2-H / H-Optimus-0 결과와 직접 비교가 가능하다. gated repo이므로 HF 토큰 인증 필요.
 
-> 201장 중 10장(C228T)만 완료, 기록분은 무결성 검사 통과. 중단 사유는 코드·데이터 문제가 아니라 **실행 중 GPU 탈락에 따른 NCCL watchdog timeout**과 **출력 디렉토리 쓰기 권한 문제**. 추출기는 완료된 `.npy`를 건너뛰는 resume 구조(`.tmp.npy` → rename)라 환경 복구 후 재실행하면 이어서 진행된다. fd 한도 초과(`Too many open files`) 대응으로 `set_sharing_strategy("file_system")`와 `ulimit -n 65536`을 적용해 두었다.
+> **201/201 완료** (Wild 113 / C228T 69 / C250T 19), 총 4,273,287 패치 · WSI당 평균 21,260개로 40x 패치 총수와 일치해 누락 없음. 전수 검사에서 `float32 [N, 1536]` shape·dtype 이상 0건, 미완료 `.tmp.npy` 0건, 샘플 검사에서 NaN·all-zero row 미검출.
+>
+> 추출 과정에서 겪은 문제와 조치: fd 한도 초과(`Too many open files`)는 `set_sharing_strategy("file_system")`와 `ulimit -n 65536`으로, 중간 중단(GPU 탈락에 따른 NCCL watchdog timeout, 출력 디렉토리 쓰기 권한)은 완료된 `.npy`를 건너뛰는 resume 구조(`.tmp.npy` 기록 후 rename)로 해결해 작업 손실 없이 이어서 완료하였다.
 
 ---
 
@@ -170,3 +173,4 @@ outputs/
 |---|---|---|
 | H-Optimus-0 20x (`v0.9.x~`) | 20x 224×224 · binary | 임베딩 `201/201` 완료, 결과 없음 |
 | H-Optimus-0 3-class (`v0.10.x~`) | 40x 512×512 · argmax (threshold 미적용)<br>split: `..._hoptimus_3class.json` | `v0.10.0` 학습 중 (abmil, bag_size=500) |
+| H-Optimus-1 40x (`v0.11.x~`) | 40x 512×512 → resize 224×224 · binary | 임베딩 `201/201` 완료, 학습 예정 |
