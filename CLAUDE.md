@@ -17,7 +17,7 @@
 | H-Optimus-0 | 40x→resize 224×224 | `/path/to/dataset/h_optimus_embeddings/{class}/npy/` | `config/cv_splits_tert_5fold_seed42_hoptimus.json` | v0.6.x~v0.8.x |
 | H-Optimus-0 | 20x 224×224 | `/path/to/dataset/h_optimus_embeddings_20x/{class}/npy/` | `config/cv_splits_tert_5fold_seed42_hoptimus_20x.json` | v0.9.x~ |
 | H-Optimus-0 (3-class) | 40x 512×512 | `/path/to/dataset/h_optimus_embeddings/{Wild,C228T,C250T}/npy/` | `config/cv_splits_tert_5fold_seed42_hoptimus_3class.json` | v0.10.x~ |
-| H-Optimus-1 | 40x 512×512 → 224 | `/path/to/dataset/h_optimus_1_embeddings_40x/{class}/npy/` | UNI2-H split 경로 변환 | 추출 중단 (10/201) |
+| H-Optimus-1 | 40x 512×512 → 224 | `/path/to/dataset/h_optimus_1_embeddings_40x/{class}/npy/` | UNI2-H split 경로 변환 | v0.11.x~ (학습 예정) |
 
 - 임베딩: 1536-dim float32
 - 혼용 금지: CV_SPLIT_FILE과 임베딩 경로 반드시 같은 계열 사용
@@ -63,6 +63,7 @@ python src/data/create_cv_splits_hoptimus.py [--verify]
 # H-Optimus (40x)     → cv_splits_tert_5fold_seed42_hoptimus.json        (v0.6~v0.8)
 # H-Optimus (20x)     → cv_splits_tert_5fold_seed42_hoptimus_20x.json    (v0.9~)
 # H-Optimus (3-class) → cv_splits_tert_5fold_seed42_hoptimus_3class.json (v0.10~)
+# H-Optimus-1 (40x)   → create_cv_splits_hoptimus.py로 경로 변환해 생성 (v0.11~, train.sh에 항목 미추가)
 cd src/training && bash train.sh
 
 # MLflow Registry 등록
@@ -96,5 +97,6 @@ python src/inference/register_model.py --model_save_dir outputs/thyroid_tert_mod
   (타일 수가 많은 슬라이드에서 fd 한도 초과로 중단됨)
 - H-Optimus-1은 gated repo — HuggingFace 토큰 인증 필요, 토큰·모델 캐시는 서버별로 별도 설정
 - H-Optimus-1 정규화 상수·출력 차원은 H-Optimus-0과 동일 (코드 차이는 모델 ID 한 줄)
-- **H-Optimus-1 임베딩은 201장 중 10장(5%)에서 중단된 상태.** 사유는 GPU 탈락에 따른
-  NCCL watchdog timeout + 출력 디렉토리 쓰기 권한 문제. 환경 복구 후 재실행하면 이어서 진행됨
+- **H-Optimus-1 임베딩은 201/201 추출 완료** (2026-09-18 확인, 4,273,287 패치).
+  과거 GPU 탈락(NCCL watchdog timeout)과 출력 디렉토리 쓰기 권한 문제로 중단된 적이
+  있으나, resume 구조 덕에 손실 없이 이어서 완료함
