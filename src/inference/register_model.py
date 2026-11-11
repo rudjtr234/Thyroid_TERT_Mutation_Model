@@ -109,9 +109,15 @@ def register(checkpoint_path: Path, run_id: str, model_type: str,
     model_name = REGISTERED_MODEL_NAME
     pt_name = checkpoint_path.name
 
+    # 인코더명은 체크포인트의 in_dim으로 추론한다 (Hibou-L=1024 / hibou-b=768 / 그 외=1536).
+    # 하드코딩하면 Hibou 모델이 UNI2-H로 잘못 등록된다.
+    _in_dim = int((model_hparams or {}).get("in_dim", 1536))
+    encoder_label = {1024: "Hibou-L", 768: "Hibou-B"}.get(_in_dim, "UNI2-H/H-Optimus")
+    encoder_label = f"{encoder_label} ({_in_dim}-dim)"
+
     model_description = (
         f"TERT Mutation 5-Fold CV\n"
-        f"Backbone: {model_type.upper()} + UNI2-H (1536-dim)\n"
+        f"Backbone: {model_type.upper()} + {encoder_label}\n"
         f"Best fold AUC: {best_auc:.4f} | Test AUC(mean): {test_auc_mean}, "
         f"Acc: {test_acc_mean}, F1: {test_f1_mean}\n"
         f"bag_size={bag_size}, lr={lr}, seed={seed}"
@@ -135,7 +141,7 @@ def register(checkpoint_path: Path, run_id: str, model_type: str,
     new_version = int(mv.version)
 
     # 버전 태그
-    client.set_model_version_tag(model_name, mv.version, "embedding", "UNI2-H (1536-dim)")
+    client.set_model_version_tag(model_name, mv.version, "embedding", encoder_label)
     client.set_model_version_tag(model_name, mv.version, "best_fold_auc", str(round(best_auc, 4)))
     client.set_model_version_tag(model_name, mv.version, "test_auc_mean", str(test_auc_mean))
     client.set_model_version_tag(model_name, mv.version, "test_acc_mean", str(test_acc_mean))

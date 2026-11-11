@@ -107,7 +107,7 @@ def find_json_metadata(
     TERT dataset structure: embedding/{C228T|C250T|Wild}/json/{sample_id}.json
 
     Args:
-        wsi_name: WSI sample ID (e.g., TC_04_8001)
+        wsi_name: WSI sample ID (e.g., SLIDE_0001)
         embedding_base_dir: Base directory for embeddings
         npy_path: Optional npy file path to extract class from
 
@@ -139,7 +139,7 @@ def extract_coordinates_from_json(metadata: Dict) -> Tuple[Dict, Tuple[int, int]
 
     TERT JSON structure:
     {
-        "slide_id": "TC_04_8001",
+        "slide_id": "SLIDE_0001",
         "num_tiles": 27465,
         "patch_coords": [{"name": "...", "x": 0, "y": 100352}, ...]
     }

@@ -53,7 +53,7 @@ class TERTWSIDataset(Dataset):
         self.use_variance = use_variance
 
         for filepath in wsi_files:
-            # Extract sample ID from filename (e.g., TC_04_8001.npy -> TC_04_8001)
+            # Extract sample ID from filename (e.g., SLIDE_0001.npy -> SLIDE_0001)
             filename = os.path.basename(filepath)
             sample_id = filename.replace('.npy', '').replace('.pt', '')
 
@@ -141,9 +141,9 @@ def load_tert_labels_from_cv_splits(cv_split_file: str, num_classes: int = 2) ->
     # 경로에서 라벨 추출
     for filepath in all_paths:
         # 경로에서 sample_id와 class 추출
-        # 예: /data/.../embedding/C228T/npy/TC_04_8001.npy
+        # 예: /data/.../embedding/C228T/npy/SLIDE_0001.npy
         parts = Path(filepath).parts
-        filename = Path(filepath).stem  # TC_04_8001
+        filename = Path(filepath).stem  # SLIDE_0001
 
         # npy 폴더의 상위 폴더가 클래스명
         try:
@@ -244,7 +244,7 @@ if __name__ == "__main__":
     set_seed(42)
 
     # Excel에서 label 로드
-    excel_path = "config/Thyroid_TC_04_8001_TC_04_8201_TERT.xlsx"
+    excel_path = "config/tert_labels.xlsx"
     labels_dict = load_tert_labels_from_excel(excel_path)
 
     print(f"\nSample labels:")

@@ -8,3 +8,18 @@ logs/
 *.npy
 *.svs
 .DS_Store
+
+# 모델 가중치 · 임베딩 · 직렬화 산출물
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.onnx
+*.pkl
+*.pickle
+*.h5
+*.npz
+*.joblib
+checkpoints/
+mlruns/
+*.log

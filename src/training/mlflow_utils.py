@@ -65,6 +65,48 @@ def _aggregate_split_metrics(folds: List[Dict[str, Any]], split: str) -> Dict[st
     return summary
 
 
+def infer_encoder(cv_split_file: Optional[str] = None,
+                  in_dim: Optional[int] = None) -> tuple:
+    """CV split JSON에서 인코더명/차원/패치 정보를 읽는다.
+
+    split JSON에는 create_cv_splits_hoptimus.py가 기록한 encoder/embed_dim이 들어 있다.
+    없으면 파일명으로 추론하고, 그래도 모르면 in_dim으로 Hibou 여부만 가린다.
+
+    주의: 'hoptimus1'은 'hoptimus'를 부분 문자열로 포함하므로 반드시 먼저 검사한다.
+    """
+    encoder, dim, patch = None, in_dim, None
+
+    if cv_split_file:
+        try:
+            with open(cv_split_file) as f:
+                meta = json.load(f)
+            encoder = meta.get("encoder")
+            dim = meta.get("embed_dim", dim)
+        except Exception:
+            pass
+
+        name = str(cv_split_file).lower()
+        if not encoder:
+            if "hibou" in name:
+                encoder = "Hibou-L"
+            elif "hoptimus1" in name:
+                encoder = "H-Optimus-1"
+            elif "hoptimus" in name:
+                encoder = "H-Optimus-0"
+            else:
+                encoder = "UNI2-H"
+        patch = "20x 224x224" if "20x" in name else "40x 512x512"
+
+    if not encoder:
+        # split 정보가 없을 때의 최후 수단: 차원으로만 구분
+        encoder = {1024: "Hibou-L", 768: "Hibou-B"}.get(dim, "UNI2-H")
+    if dim is None:
+        dim = 1536
+    if patch is None:
+        patch = "40x 512x512"
+    return encoder, dim, patch
+
+
 def upload_to_mlflow(
     model_save_dir: str,
     json_path: str,
@@ -76,6 +118,8 @@ def upload_to_mlflow(
     mode: Optional[str] = None,
     model_type: Optional[str] = None,
     num_classes: Optional[int] = None,
+    cv_split_file: Optional[str] = None,
+    in_dim: Optional[int] = None,
 ):
     """
     MLflow에 학습 결과를 자동으로 업로드하는 함수
@@ -141,10 +185,15 @@ def upload_to_mlflow(
         # Description
         mlflow.set_tag("num_classes", resolved_num_classes)
         mlflow.set_tag("task_label", task_label)
+        enc, enc_dim, patch_info = infer_encoder(cv_split_file, in_dim)
+        mlflow.log_param("encoder", enc)
+        mlflow.log_param("in_dim", enc_dim)
+        mlflow.set_tag("encoder", enc)
         mlflow.set_tag(
             "Description",
-            f"WSI -> Patch(512x512) -> UNI2 Embedding -> {resolved_model_type.upper()} -> {task_label}. "
-            f"5-fold Stratified CV(8:1:1). Model: {resolved_model_type.upper()} + UNI2(1536-dim). "
+            f"WSI -> Patch({patch_info}) -> {enc} Embedding({enc_dim}-dim) -> "
+            f"{resolved_model_type.upper()} -> {task_label}. "
+            f"5-fold Stratified CV(8:1:1). "
             + ("Fixed threshold=0.5." if resolved_num_classes <= 2 else "Prediction via argmax (no fixed threshold)."),
         )
 

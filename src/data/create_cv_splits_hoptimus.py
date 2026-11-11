@@ -1,12 +1,20 @@
 """
-기존 UNI2-H CV split JSON의 경로를 H-Optimus-0 경로로 변환하여 새 JSON 생성.
-fold 구조(train/val/test 샘플 구성)는 그대로 유지하고 경로만 변경.
+기존 UNI2-H CV split JSON의 경로를 다른 인코더 경로로 변환하여 새 JSON 생성.
+fold 구조(train/val/test 샘플 구성)는 그대로 유지하고 경로만 변경한다.
+
+주의: 인코더마다 임베딩 차원이 다르다. Hibou는 1536이 아니므로 --embed_dim을 반드시 맞출 것.
+      (hibou-L=1024, hibou-b=768, UNI2-H/H-Optimus 계열=1536)
+      여기 기록된 embed_dim은 학습 시 --in_dim 값과 일치해야 한다.
 
 Usage:
-    python create_cv_splits_hoptimus.py
-
-    # 파일 존재 여부까지 확인하려면 (임베딩 추출 완료 후):
+    # H-Optimus-0 20x (기본값)
     python create_cv_splits_hoptimus.py --verify
+
+    # Hibou-L 40x (1024-dim)
+    python create_cv_splits_hoptimus.py \
+        --new_root /path/to/dataset/hibou_L_embeddings_40x \
+        --output_json config/cv_splits_tert_5fold_seed42_hibou_L_40x_2class.json \
+        --encoder Hibou-L --embed_dim 1024 --verify
 """
 
 import json
@@ -39,6 +47,10 @@ def main():
     parser.add_argument("--output_json", type=str, default=OUTPUT_JSON)
     parser.add_argument("--old_root",    type=str, default=OLD_ROOT)
     parser.add_argument("--new_root",    type=str, default=NEW_ROOT)
+    parser.add_argument("--encoder", type=str, default="H-Optimus-0",
+                        help="split JSON에 기록할 인코더 이름 (예: Hibou-L)")
+    parser.add_argument("--embed_dim", type=int, default=1536,
+                        help="임베딩 차원. Hibou-L=1024, hibou-b=768, 그 외=1536")
     parser.add_argument("--verify", action="store_true",
                         help="변환된 경로의 npy 파일 존재 여부 확인")
     args = parser.parse_args()
@@ -48,8 +60,8 @@ def main():
 
     new_data = dict(data)
     new_data["embedding_root"] = args.new_root
-    new_data["encoder"] = "H-Optimus-0"
-    new_data["embed_dim"] = 1536
+    new_data["encoder"] = args.encoder
+    new_data["embed_dim"] = args.embed_dim
     new_data["source_json"] = args.input_json
 
     missing = []

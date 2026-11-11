@@ -155,6 +155,8 @@ def main():
                 seed=args.seed,
                 model_type=args.model_type,
                 num_classes=args.num_classes,
+                cv_split_file=args.cv_split_file,
+                in_dim=args.in_dim,
             )
             print(f"\n[+] MLflow upload completed!")
 
